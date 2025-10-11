@@ -2,6 +2,7 @@ import os
 import sys
 import grpc
 import psycopg2
+from psycopg2 import pool
 import redis
 import bcrypt
 import jwt
@@ -24,8 +25,38 @@ GRACE_MINUTES = int(os.getenv('GRACE_MINUTES', '15'))
 
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
+# Connection pool: min 10, max 100 connections per instance
+# With 3 instances: total 300 connections (matching PostgreSQL max_connections=300)
+connection_pool = None
+
+def init_connection_pool():
+    global connection_pool
+    try:
+        connection_pool = pool.ThreadedConnectionPool(
+            minconn=10,
+            maxconn=100,
+            dsn=DATABASE_URL
+        )
+        print(f"Database connection pool initialized (10-100 connections)")
+    except Exception as e:
+        print(f"Error creating connection pool: {e}")
+        raise
+
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
+    """Get a connection from the pool"""
+    try:
+        return connection_pool.getconn()
+    except Exception as e:
+        print(f"Error getting connection from pool: {e}")
+        raise
+
+def return_db_connection(conn):
+    """Return a connection to the pool"""
+    try:
+        if conn:
+            connection_pool.putconn(conn)
+    except Exception as e:
+        print(f"Error returning connection to pool: {e}")
 
 def generate_jwt(user_id, student_id):
     payload = {
@@ -67,7 +98,7 @@ class AuthServiceServicer(library_pb2_grpc.AuthServiceServicer):
 
             user = cur.fetchone()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             if not user:
                 context.set_code(grpc.StatusCode.UNAUTHENTICATED)
@@ -111,7 +142,7 @@ class AuthServiceServicer(library_pb2_grpc.AuthServiceServicer):
                 token = generate_jwt(user['id'], user['student_id'])
 
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
 
                 return library_pb2.RegisterResponse(
                     token=token,
@@ -123,7 +154,7 @@ class AuthServiceServicer(library_pb2_grpc.AuthServiceServicer):
             except psycopg2.IntegrityError:
                 conn.rollback()
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.ALREADY_EXISTS)
                 context.set_details('Student ID already exists')
                 return library_pb2.RegisterResponse()
@@ -160,7 +191,7 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
 
             result = cur.fetchone()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             return result['conflict_count'] == 0
         else:
@@ -175,7 +206,7 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
 
             result = cur.fetchone()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             return result['active_count'] == 0
 
@@ -207,7 +238,7 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
             cur.execute(query, params)
             seats = cur.fetchall()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             result_seats = []
             for seat in seats:
@@ -244,7 +275,7 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
 
             if not seat:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details('Seat not found')
                 return library_pb2.GetSeatResponse()
@@ -252,7 +283,7 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
             is_available = self.get_seat_availability(request.seat_id)
 
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             return library_pb2.GetSeatResponse(
                 seat=library_pb2.Seat(
@@ -281,7 +312,7 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
 
             if not seat:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details('Seat not found')
                 return library_pb2.CheckAvailabilityResponse()
@@ -289,7 +320,7 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
             is_available = self.get_seat_availability(request.seat_id, request.start_time, request.end_time)
 
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             return library_pb2.CheckAvailabilityResponse(
                 seat_id=request.seat_id,
@@ -319,7 +350,7 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
 
             branches = cur.fetchall()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             result = [library_pb2.Branch(
                 branch=b['branch'],
@@ -346,7 +377,7 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
             if not seat:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details('Seat not found')
                 return library_pb2.CreateReservationResponse()
@@ -362,7 +393,7 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
                 conn.commit()
 
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
 
                 invalidate_seat_cache(request.seat_id)
 
@@ -382,7 +413,7 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
             except psycopg2.IntegrityError as e:
                 conn.rollback()
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
 
                 if 'reservations_no_overlap' in str(e):
                     context.set_code(grpc.StatusCode.ALREADY_EXISTS)
@@ -414,7 +445,7 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
             reservation = cur.fetchone()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             if not reservation:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
@@ -460,14 +491,14 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
             if not reservation:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details('Reservation not found')
                 return library_pb2.CheckInResponse()
 
             if reservation['status'] != 'CONFIRMED':
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 context.set_details(f'Cannot check in: reservation status is {reservation["status"]}')
                 return library_pb2.CheckInResponse()
@@ -478,14 +509,14 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
             if now < start_time:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 context.set_details('Cannot check in before reservation start time')
                 return library_pb2.CheckInResponse()
 
             if now > end_time:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 context.set_details('Cannot check in after reservation end time')
                 return library_pb2.CheckInResponse()
@@ -501,7 +532,7 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
             conn.commit()
 
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             invalidate_seat_cache(reservation['seat_id'])
 
@@ -538,14 +569,14 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
             if not reservation:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details('Reservation not found')
                 return library_pb2.CancelReservationResponse()
 
             if reservation['status'] in ('CANCELLED', 'NO_SHOW', 'COMPLETED'):
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 context.set_details(f'Cannot cancel: reservation status is {reservation["status"]}')
                 return library_pb2.CancelReservationResponse()
@@ -561,7 +592,7 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
             conn.commit()
 
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             invalidate_seat_cache(reservation['seat_id'])
 
@@ -607,7 +638,7 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
             cur.execute(query, params)
             reservations = cur.fetchall()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             result = [library_pb2.ReservationDetail(
                 id=r['id'],
@@ -651,7 +682,7 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
             conn.commit()
 
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             return library_pb2.AddToWaitlistResponse(
                 entry=library_pb2.WaitlistEntry(
@@ -684,7 +715,7 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
 
             waitlist_entries = cur.fetchall()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             result = [library_pb2.WaitlistEntry(
                 id=e['id'],
@@ -712,14 +743,14 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
 
             if not deleted:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details('Waitlist entry not found')
                 return library_pb2.RemoveFromWaitlistResponse()
 
             conn.commit()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             return library_pb2.RemoveFromWaitlistResponse(
                 message='Removed from waitlist',
@@ -770,7 +801,7 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
                 conn.commit()
 
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
 
                 return library_pb2.NotifyUsersResponse(
                     notified=True,
@@ -780,7 +811,7 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
                 )
             else:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
 
                 return library_pb2.NotifyUsersResponse(
                     notified=False,
@@ -845,7 +876,7 @@ def background_worker():
                         conn.rollback()
 
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             return len(no_show_reservations)
 
@@ -889,7 +920,7 @@ def background_worker():
                         conn.rollback()
 
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             return len(completed_reservations)
 
@@ -914,7 +945,12 @@ def background_worker():
         time.sleep(60)
 
 def serve():
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    # Initialize connection pool BEFORE starting server
+    print("Initializing database connection pool...")
+    init_connection_pool()
+
+    # Increase max_workers to match connection pool size
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=100))
 
     library_pb2_grpc.add_AuthServiceServicer_to_server(AuthServiceServicer(), server)
     library_pb2_grpc.add_SeatServiceServicer_to_server(SeatServiceServicer(), server)
@@ -926,7 +962,7 @@ def serve():
     worker_thread = threading.Thread(target=background_worker, daemon=True)
     worker_thread.start()
 
-    print('gRPC server started on port 9090')
+    print('gRPC server started on port 9090 with 100-connection pool (10-100 per instance)')
     server.start()
     server.wait_for_termination()
 
