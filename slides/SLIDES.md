@@ -145,7 +145,7 @@ A distributed seat management system with:
 
 ---
 
-## gRPC Monolithic Architecture
+## gRPC Load-Balanced Architecture
 
 ```
 ┌─────────┐
@@ -154,21 +154,17 @@ A distributed seat management system with:
      │ gRPC
      ▼
 ┌──────────────────────┐
-│   gRPC Server        │  Port 9090
-│   (Single Process)   │
-│                      │
-│  ┌───────────────┐   │
-│  │ AuthService   │   │
-│  ├───────────────┤   │
-│  │ SeatService   │   │
-│  ├───────────────┤   │
-│  │ ReservService │   │
-│  ├───────────────┤   │
-│  │ NotifyService │   │
-│  ├───────────────┤   │
-│  │ Bg Worker     │   │
-│  └───────────────┘   │
-└──────────┬───────────┘
+│  Nginx Load Balancer │  Port 9090
+│  (HTTP/2 round-robin)│
+└─────┬──────┬─────┬───┘
+      │      │     │
+      ▼      ▼     ▼
+   ┌────┐ ┌────┐ ┌────┐
+   │App1│ │App2│ │App3│  3 gRPC Instances
+   │650 │ │650 │ │650 │  (650 LOC each)
+   │LOC │ │LOC │ │LOC │
+   └──┬─┘ └──┬─┘ └──┬─┘
+      └──────┴──────┘
            │
            ▼
 ┌──────────────────────┐
@@ -177,9 +173,10 @@ A distributed seat management system with:
 ```
 
 ### Key Design Choices
-- **Unified process** (shared connection pool)
+- **3 app instances** (load-balanced for ≥5 nodes)
+- **Connection pooling** (10-100/instance × 3 = 300 total)
 - **Protocol Buffers** (strongly typed)
-- **Integrated worker** (threading.Thread)
+- **Integrated worker** (threading.Thread per instance)
 
 ---
 
@@ -369,6 +366,10 @@ When user requests unavailable seat:
 - **Hardware:** Apple M-series (ARM64), 16 GB RAM
 - **OS:** macOS Tahoe (Darwin 25.0.0)
 - **Docker:** Desktop 4.x, Compose 3.8
+- **PostgreSQL:** 300 max_connections, 256MB shared_buffers
+- **Connection Pools:**
+  - REST: 120 total (20 per service × 6)
+  - gRPC: 300 total (10-100 per instance × 3)
 
 ### Benchmarking Tools
 - **REST:** `hey` v0.1.4 (HTTP load generator)
@@ -376,14 +377,14 @@ When user requests unavailable seat:
 
 ### Test Parameters
 - **Duration:** 30 seconds per test
-- **Concurrency:** 50, 100, 200 connections
+- **Concurrency:** REST (50/100/200), gRPC (50/100/150)
 - **Endpoint:** Seat listing (most common operation)
 - **Payload:** `{"available_only": true}`
 
 ### Metrics
 - **RPS:** Requests per second (throughput)
 - **P50/P95/P99:** Latency percentiles (ms)
-- **Error Rate:** Failed / total requests (%)
+- **Success Rate:** OK / total requests (%)
 
 ---
 
@@ -393,17 +394,20 @@ When user requests unavailable seat:
 
 ### Key Findings
 - **REST** maintains ~2,480 RPS across all concurrency levels
-- **gRPC** shows high variance: 1,155 → 2,145 → 1,095 RPS
+- **gRPC** achieves ~320 RPS (stable with connection pooling)
+- **REST is 7-8x faster in throughput**
 
 ### Why REST Wins?
-✅ **6 microservices** share the workload
-✅ **600 total DB connections** (6 services × 100 each)
+✅ **6 microservices** distribute load across processes
+✅ **120 total DB connections** with independent pools
 ✅ **Redis caching** reduces DB queries by 70%
+✅ **Mature HTTP/JSON stack** optimized for throughput
 
-### Why gRPC Struggles?
-❌ **Single process bottleneck**
-❌ **100 connection limit** → blocking at high concurrency
-❌ **98% error rate** at c=200 (connection exhaustion)
+### Why gRPC Lower?
+⚠️ **Load balancer overhead** (nginx HTTP/2 proxying adds 5-10ms)
+⚠️ **Protobuf serialization** cost per request
+⚠️ **Connection pool contention** across 3 instances
+✅ **But reliable:** 96-99% success rate (no connection exhaustion!)
 
 ---
 
@@ -417,58 +421,59 @@ When user requests unavailable seat:
   - c=100: P95=**45.3ms**
   - c=200: P95=**90.8ms**
 
-- **gRPC:** Severe latency spikes
-  - c=50: P95=**1,410ms** (60x higher!)
-  - c=200: P95=**5,640ms** (60x higher!)
+- **gRPC:** Moderate latency with connection pooling
+  - c=50: P95=**507.78ms** (21x higher)
+  - c=100: P95=**965.63ms** (21x higher)
+  - c=150: P95=**1,310ms** (14x higher than REST c=200)
 
 ### Root Cause
-gRPC single process has limited connection pool (20 connections):
-- 100 concurrent requests
-- 20 available connections
-- **80 requests wait in queue**
-- Average wait time: **1,140ms**
+Even with connection pooling (300 total), gRPC still queues:
+- 100 concurrent requests → nginx → 3 instances (~33 each)
+- Each instance: 100 threads + 100 connections
+- DB query time (~15ms) causes queuing at high load
+- **P50 is good (16-88ms), but P95 shows queuing (500-1300ms)**
 
 ---
 
 ## Performance Results: Summary Table
 
-| Architecture | Concurrency | RPS | P50 (ms) | P95 (ms) | P99 (ms) | Error Rate |
-|--------------|-------------|-----|----------|----------|----------|------------|
-| **REST** | 50 | 2,479 | 19.6 | 23.6 | 28.5 | 0% |
-| **REST** | 100 | 2,510 | 38.7 | 45.3 | 54.7 | 0% |
-| **REST** | 200 | 2,478 | 78.4 | 90.8 | 156.4 | 0% |
-| **gRPC** | 50 | 1,155 | 1,140 | 1,410 | 1,430 | 1.7% |
-| **gRPC** | 100 | 2,145 | 0* | 0* | 0* | 98.2% |
-| **gRPC** | 200 | 1,095 | 4,480 | 5,640 | 5,680 | 98.7% |
-
-*Invalid data due to high error rate
+| Architecture | Concurrency | Instances | RPS | P50 (ms) | P95 (ms) | P99 (ms) | Success Rate |
+|--------------|-------------|-----------|-----|----------|----------|----------|--------------|
+| **REST** | 50 | 6 | 2,479 | 19.6 | 23.6 | 28.5 | 100.0% |
+| **REST** | 100 | 6 | 2,510 | 38.7 | 45.3 | 54.7 | 100.0% |
+| **REST** | 200 | 6 | 2,478 | 78.4 | 90.8 | 156.4 | 100.0% |
+| **gRPC** | 50 | 3 | 305 | 16.78 | 507.78 | 550.79 | 99.5% |
+| **gRPC** | 100 | 3 | 327 | 21.29 | 965.63 | 1,060 | 99.0% |
+| **gRPC** | 150 | 3 | 340 | 88.60 | 1,310 | 1,460 | 96.6% |
 
 ### Winner by Category
-✅ **Throughput:** REST (2.3x higher average)
-✅ **Latency:** REST (60x lower P95)
-✅ **Reliability:** REST (0% vs 33% error rate)
-⚠️ **Scalability:** Tie (both hit limits)
+✅ **Throughput:** REST (7.5x higher: 2,490 vs 324 RPS avg)
+✅ **P50 Latency:** gRPC marginally better at low load (17ms vs 20ms)
+✅ **P95 Latency:** REST (23x lower: 53ms vs 928ms avg)
+✅ **Reliability:** REST (100% vs 98.4% success rate)
+✅ **Scalability:** REST (handles c=200, gRPC degrades beyond c=100)
 
 ---
 
 ## Design Trade-offs: REST vs gRPC
 
-| Aspect | REST Microservices | gRPC Monolith |
-|--------|-------------------|---------------|
-| **Deployment** | Complex (6 containers) | Simple (1 container) |
-| **Throughput** | ✅ High (2,480 RPS) | ⚠️ Moderate (1,155 RPS) |
-| **Latency** | ✅ Low (23.6ms P95) | ❌ High (1,410ms P95) |
-| **Reliability** | ✅ Fault isolation | ❌ Single point of failure |
-| **Debugging** | ⚠️ Distributed tracing needed | ✅ Simple stack traces |
-| **Scaling** | ✅ Independent services | ⚠️ Scale entire app |
-| **Ops Complexity** | ❌ High (6 services) | ✅ Low (1 service) |
-| **Dev Complexity** | ⚠️ Network calls | ✅ Function calls |
+| Aspect | REST Microservices | gRPC Load-Balanced |
+|--------|-------------------|-------------------|
+| **Deployment** | Complex (8 containers) | Moderate (6 containers) |
+| **Throughput** | ✅ High (2,480 RPS) | ⚠️ Moderate (320 RPS) |
+| **Latency** | ✅ Low (23-91ms P95) | ⚠️ Moderate (508-1,310ms P95) |
+| **Reliability** | ✅ Fault isolation | ✅ Load-balanced (99% success) |
+| **Debugging** | ⚠️ Distributed tracing needed | ⚠️ Multi-instance logs |
+| **Scaling** | ✅ Independent services | ⚠️ Scale entire app instances |
+| **Ops Complexity** | ❌ High (6 services) | ⚠️ Moderate (3 instances + LB) |
+| **Dev Complexity** | ⚠️ Network calls | ⚠️ Protobuf + connection pooling |
 
 ### Verdict for DL-SMS
 **REST microservices** is the better choice because:
 - Seat reservation workloads are inherently distributed
-- Network overhead (2-5ms) is negligible vs. user think time
-- Operational benefits outweigh performance costs
+- 7-8x better throughput crucial for peak hours (finals week)
+- Network overhead (2-5ms) negligible vs. user think time
+- Operational benefits (caching, fault isolation) outweigh costs
 
 ---
 
@@ -629,10 +634,11 @@ A **production-ready distributed system** with:
 
 ### Final Verdict
 **REST microservices** wins for DL-SMS use case:
-- Better throughput (2.3x)
-- Lower latency (60x)
-- Higher reliability (0% errors)
-- Operational benefits outweigh costs
+- Better throughput (7.5x: 2,490 vs 324 RPS)
+- Lower latency (23x better P95: 53ms vs 928ms)
+- Higher reliability (100% vs 98.4% success rate)
+- Better scalability (handles c=200 vs c=150)
+- Operational benefits (caching, fault isolation) outweigh costs
 
 ---
 

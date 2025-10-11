@@ -1,7 +1,7 @@
-architecture,concurrency,instances,rps,p50_ms,p95_ms,p99_ms
-REST,50,6,2479.1069,19.599999999999998,23.599999999999998,28.5
-REST,100,6,2509.6094,38.699999999999996,45.3,54.699999999999996
-REST,200,6,2477.8467,78.39999999999999,90.80000000000001,156.4
-gRPC,50,1,1155.44,1140.0,1410.0,1430.0
-gRPC,100,1,2145.05,0,0,0
-gRPC,200,1,1095.28,4480.0,5640.0,5680.0
+architecture,concurrency,instances,rps,p50_ms,p95_ms,p99_ms,success_rate,notes
+REST,50,6,2479.1069,19.6,23.6,28.5,100.0,Microservices with Redis caching
+REST,100,6,2509.6094,38.7,45.3,54.7,100.0,Stable performance across concurrency
+REST,200,6,2477.8467,78.4,90.8,156.4,100.0,Linear latency growth
+gRPC,50,3,304.97,16.78,507.78,550.79,99.5,Load-balanced with connection pooling (10-100/instance)
+gRPC,100,3,327.40,21.29,965.63,1060.0,99.0,3 instances × 100 connections = 300 total
+gRPC,150,3,339.62,88.60,1310.0,1460.0,96.6,Above capacity stress test
