@@ -38,8 +38,8 @@ python3 scripts/generate_graphs.py
 
 ## Final Deliverables
 
-- ✅ **Source code:** 38 files, 6,800+ lines
-- ✅ **Two architectures:** REST (6 services) + gRPC (1 service)
+- ✅ **Source code:** 53 files, 7,000+ lines
+- ✅ **Two architectures:** REST (8 nodes) + gRPC (6 nodes with load balancing)
 - ✅ **All 5 features implemented and tested**
 - ✅ **Performance benchmarks and graphs:**
   - REST: 2,479 RPS, 23.6ms P95 latency
@@ -118,28 +118,36 @@ python3 scripts/generate_graphs.py
     :5433          :6379
 ```
 
-### gRPC Architecture (Monolithic)
+### gRPC Architecture (Load Balanced)
 
 ```
 ┌─────────┐
 │ Client  │
 └────┬────┘
      │
-┌────▼──────────────────────────┐
-│   gRPC Server :9090           │
-│  ┌──────────────────────────┐ │
-│  │ AuthService              │ │
-│  │ SeatService              │ │
-│  │ ReservationService       │ │
-│  │ NotifyService            │ │
-│  │ Background Worker Thread │ │
-│  └──────────────────────────┘ │
-└───────────────┬────────────────┘
-                │
-        ┌───────┴────────┐
-        │                │
-    PostgreSQL      Redis
-    :5433          :6379
+┌────▼────────────────────────────┐
+│  Nginx Load Balancer :9090      │
+│  (Round-robin distribution)     │
+└────┬───────┬────────┬────────────┘
+     │       │        │
+     │       │        │
+┌────▼──┐  ┌─▼────┐  ┌▼─────┐
+│ App 1 │  │ App 2│  │ App 3│
+│ :9090 │  │ :9090│  │ :9090│
+└───┬───┘  └──┬───┘  └──┬───┘
+    └─────────┼─────────┘
+              │
+      ┌───────┴────────┐
+      │                │
+  PostgreSQL      Redis
+  :5433          :6379
+
+Each App contains:
+- AuthService
+- SeatService
+- ReservationService
+- NotifyService
+- Background Worker Thread
 ```
 
 ## Prerequisites
