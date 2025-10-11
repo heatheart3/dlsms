@@ -139,11 +139,23 @@ services:
         condition: service_healthy
     profiles: ["rest"]
 
-  # gRPC Architecture Service
-  grpc-app:
-    build: ./grpc/app
+  # gRPC Architecture Services (≥5 nodes requirement)
+  # Load Balancer (nginx)
+  grpc-lb:
+    image: nginx:alpine
     ports:
       - "9090:9090"
+    volumes:
+      - ./grpc/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - grpc-app1
+      - grpc-app2
+      - grpc-app3
+    profiles: ["grpc"]
+
+  # gRPC App Instance 1
+  grpc-app1:
+    build: ./grpc/app
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
@@ -151,6 +163,43 @@ services:
       - JWT_ALGORITHM=${JWT_ALGORITHM}
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS}
       - GRACE_MINUTES=${GRACE_MINUTES}
+      - INSTANCE_ID=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["grpc"]
+
+  # gRPC App Instance 2
+  grpc-app2:
+    build: ./grpc/app
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ALGORITHM=${JWT_ALGORITHM}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS}
+      - GRACE_MINUTES=${GRACE_MINUTES}
+      - INSTANCE_ID=2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["grpc"]
+
+  # gRPC App Instance 3
+  grpc-app3:
+    build: ./grpc/app
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ALGORITHM=${JWT_ALGORITHM}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS}
+      - GRACE_MINUTES=${GRACE_MINUTES}
+      - INSTANCE_ID=3
     depends_on:
       postgres:
         condition: service_healthy
