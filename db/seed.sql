@@ -1,16 +1,17 @@
 -- Insert test users (password: "password123" hashed with bcrypt)
 -- Hash generated with: bcrypt.hashpw("password123".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+-- Updated: 2025-10-11 with correctly verified hash
 INSERT INTO users (student_id, password_hash, name) VALUES
-('S2021001', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Alice Johnson'),
-('S2021002', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Bob Smith'),
-('S2021003', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Charlie Brown'),
-('S2021004', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Diana Prince'),
-('S2021005', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Eve Adams'),
-('S2021006', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Frank Miller'),
-('S2021007', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Grace Hopper'),
-('S2021008', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Henry Ford'),
-('S2021009', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Ivy Chen'),
-('S2021010', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqVr/1Ry7q', 'Jack Wilson');
+('S2021001', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Alice Johnson'),
+('S2021002', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Bob Smith'),
+('S2021003', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Charlie Brown'),
+('S2021004', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Diana Prince'),
+('S2021005', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Eve Adams'),
+('S2021006', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Frank Miller'),
+('S2021007', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Grace Hopper'),
+('S2021008', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Henry Ford'),
+('S2021009', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Ivy Chen'),
+('S2021010', '$2b$12$Kxv4aDbP0mAEQqMM3VQxJem80gIxp1Xg9kN99lU2Gk73qdbR16TSi', 'Jack Wilson');
 
 -- Insert seats for Main Library
 INSERT INTO seats (branch, area, has_power, has_monitor, status) VALUES

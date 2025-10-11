@@ -5,7 +5,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../protos/library.proto /app/protos/library.proto
+# Create protos directory and copy proto file
+RUN mkdir -p /app/protos
+COPY library.proto /app/protos/library.proto
 
 RUN python -m grpc_tools.protoc -I/app/protos --python_out=. --grpc_python_out=. /app/protos/library.proto
 

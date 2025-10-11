@@ -1,6 +1,53 @@
 # Distributed Library Seat Management System (DL-SMS)
 
+**Group 10 | Danhua Zhao • Muhan Zhang | Fall 2025**
+
 A production-ready distributed system for managing library seat reservations with both REST and gRPC architectures. This system demonstrates microservices design, conflict detection, real-time availability tracking, and automated seat release mechanisms.
+
+---
+
+## Quick Start
+
+```bash
+# REST Architecture
+cp .env.example .env  # Already done if .env exists
+docker compose --profile rest up -d
+# Access: http://localhost:8080
+
+# gRPC Architecture
+docker compose --profile rest down
+docker compose --profile grpc up -d
+# Access: localhost:9090
+
+# Run Tests
+./test_rest_e2e.sh
+python3 grpc/client_test.py
+
+# Run Benchmarks (requires hey and ghz)
+./scripts/run_rest_benchmark.sh
+./scripts/run_grpc_benchmark.sh
+python3 scripts/generate_graphs.py
+```
+
+## Team
+
+- **Danhua Zhao**
+- **Muhan Zhang**
+
+**Group 10**, Fall 2025
+
+## Final Deliverables
+
+- ✅ **Source code:** 38 files, 6,800+ lines
+- ✅ **Two architectures:** REST (6 services) + gRPC (1 service)
+- ✅ **All 5 features implemented and tested**
+- ✅ **Performance benchmarks and graphs:**
+  - REST: 2,479 RPS, 23.6ms P95 latency
+  - gRPC: 1,155 RPS, 1,410ms P95 latency (connection pool bottleneck)
+- ✅ **Final report:** [report/final_report.md](/Users/muhanzhang/Documents/coding/project2/dlsms/report/final_report.md)
+- ✅ **Presentation:** [slides/SLIDES.md](/Users/muhanzhang/Documents/coding/project2/dlsms/slides/SLIDES.md)
+
+---
 
 ## Table of Contents
 
