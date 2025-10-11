@@ -1,0 +1,250 @@
+syntax = "proto3";
+
+package library;
+
+service AuthService {
+    rpc Login(LoginRequest) returns (LoginResponse);
+    rpc Register(RegisterRequest) returns (RegisterResponse);
+    rpc Verify(VerifyRequest) returns (VerifyResponse);
+}
+
+service SeatService {
+    rpc GetSeats(GetSeatsRequest) returns (GetSeatsResponse);
+    rpc GetSeat(GetSeatRequest) returns (GetSeatResponse);
+    rpc CheckAvailability(CheckAvailabilityRequest) returns (CheckAvailabilityResponse);
+    rpc GetBranches(GetBranchesRequest) returns (GetBranchesResponse);
+}
+
+service ReservationService {
+    rpc CreateReservation(CreateReservationRequest) returns (CreateReservationResponse);
+    rpc GetReservation(GetReservationRequest) returns (GetReservationResponse);
+    rpc CheckIn(CheckInRequest) returns (CheckInResponse);
+    rpc CancelReservation(CancelReservationRequest) returns (CancelReservationResponse);
+    rpc GetUserReservations(GetUserReservationsRequest) returns (GetUserReservationsResponse);
+}
+
+service NotifyService {
+    rpc AddToWaitlist(AddToWaitlistRequest) returns (AddToWaitlistResponse);
+    rpc GetUserWaitlist(GetUserWaitlistRequest) returns (GetUserWaitlistResponse);
+    rpc RemoveFromWaitlist(RemoveFromWaitlistRequest) returns (RemoveFromWaitlistResponse);
+    rpc NotifyUsers(NotifyUsersRequest) returns (NotifyUsersResponse);
+}
+
+message LoginRequest {
+    string student_id = 1;
+    string password = 2;
+}
+
+message LoginResponse {
+    string token = 1;
+    int32 user_id = 2;
+    string student_id = 3;
+    string name = 4;
+}
+
+message RegisterRequest {
+    string student_id = 1;
+    string password = 2;
+    string name = 3;
+}
+
+message RegisterResponse {
+    string token = 1;
+    int32 user_id = 2;
+    string student_id = 3;
+    string name = 4;
+}
+
+message VerifyRequest {
+    string token = 1;
+}
+
+message VerifyResponse {
+    bool valid = 1;
+    int32 user_id = 2;
+    string student_id = 3;
+}
+
+message GetSeatsRequest {
+    string branch = 1;
+    string area = 2;
+    optional bool has_power = 3;
+    optional bool has_monitor = 4;
+    bool available_only = 5;
+    string start_time = 6;
+    string end_time = 7;
+}
+
+message Seat {
+    int32 id = 1;
+    string branch = 2;
+    string area = 3;
+    bool has_power = 4;
+    bool has_monitor = 5;
+    string status = 6;
+    bool is_available = 7;
+}
+
+message GetSeatsResponse {
+    repeated Seat seats = 1;
+    int32 count = 2;
+}
+
+message GetSeatRequest {
+    int32 seat_id = 1;
+}
+
+message GetSeatResponse {
+    Seat seat = 1;
+}
+
+message CheckAvailabilityRequest {
+    int32 seat_id = 1;
+    string start_time = 2;
+    string end_time = 3;
+}
+
+message CheckAvailabilityResponse {
+    int32 seat_id = 1;
+    bool available = 2;
+    string start_time = 3;
+    string end_time = 4;
+}
+
+message GetBranchesRequest {
+}
+
+message Branch {
+    string branch = 1;
+    int32 total_seats = 2;
+    int32 power_seats = 3;
+    int32 monitor_seats = 4;
+}
+
+message GetBranchesResponse {
+    repeated Branch branches = 1;
+}
+
+message CreateReservationRequest {
+    int32 user_id = 1;
+    int32 seat_id = 2;
+    string start_time = 3;
+    string end_time = 4;
+}
+
+message Reservation {
+    int32 id = 1;
+    int32 user_id = 2;
+    int32 seat_id = 3;
+    string start_time = 4;
+    string end_time = 5;
+    string status = 6;
+    string created_at = 7;
+    string checked_in_at = 8;
+}
+
+message CreateReservationResponse {
+    Reservation reservation = 1;
+}
+
+message GetReservationRequest {
+    int32 reservation_id = 1;
+}
+
+message ReservationDetail {
+    int32 id = 1;
+    int32 user_id = 2;
+    int32 seat_id = 3;
+    string start_time = 4;
+    string end_time = 5;
+    string status = 6;
+    string created_at = 7;
+    string checked_in_at = 8;
+    string branch = 9;
+    string area = 10;
+    bool has_power = 11;
+    bool has_monitor = 12;
+    string student_id = 13;
+    string user_name = 14;
+}
+
+message GetReservationResponse {
+    ReservationDetail reservation = 1;
+}
+
+message CheckInRequest {
+    int32 reservation_id = 1;
+}
+
+message CheckInResponse {
+    Reservation reservation = 1;
+}
+
+message CancelReservationRequest {
+    int32 reservation_id = 1;
+}
+
+message CancelReservationResponse {
+    Reservation reservation = 1;
+}
+
+message GetUserReservationsRequest {
+    int32 user_id = 1;
+    string status = 2;
+    bool upcoming_only = 3;
+}
+
+message GetUserReservationsResponse {
+    repeated ReservationDetail reservations = 1;
+    int32 count = 2;
+}
+
+message AddToWaitlistRequest {
+    int32 user_id = 1;
+    optional int32 seat_id = 2;
+    string branch = 3;
+    string desired_time = 4;
+}
+
+message WaitlistEntry {
+    int32 id = 1;
+    int32 user_id = 2;
+    optional int32 seat_id = 3;
+    string branch = 4;
+    string desired_time = 5;
+    string created_at = 6;
+}
+
+message AddToWaitlistResponse {
+    WaitlistEntry entry = 1;
+}
+
+message GetUserWaitlistRequest {
+    int32 user_id = 1;
+}
+
+message GetUserWaitlistResponse {
+    repeated WaitlistEntry entries = 1;
+    int32 count = 2;
+}
+
+message RemoveFromWaitlistRequest {
+    int32 waitlist_id = 1;
+}
+
+message RemoveFromWaitlistResponse {
+    string message = 1;
+    int32 id = 2;
+}
+
+message NotifyUsersRequest {
+    int32 seat_id = 1;
+    string message = 2;
+}
+
+message NotifyUsersResponse {
+    bool notified = 1;
+    int32 user_id = 2;
+    string student_id = 3;
+    string message = 4;
+}
