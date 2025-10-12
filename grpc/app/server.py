@@ -22,8 +22,10 @@ JWT_SECRET = os.getenv('JWT_SECRET', 'your-secret-key')
 JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')
 JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
 GRACE_MINUTES = int(os.getenv('GRACE_MINUTES', '15'))
+DB_MAX_CONCURRENT = int(os.getenv('DB_MAX_CONCURRENT', '60'))
 
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+db_semaphore = threading.BoundedSemaphore(DB_MAX_CONCURRENT)
 
 # Connection pool: min 10, max 100 connections per instance
 # With 3 instances: total 300 connections (matching PostgreSQL max_connections=300)
@@ -212,55 +214,156 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
 
     def GetSeats(self, request, context):
         try:
-            query = 'SELECT * FROM seats WHERE 1=1'
-            params = []
+            cache_key_parts = [
+                request.branch or 'any',
+                request.area or 'any',
+                str(request.has_power) if request.HasField('has_power') else 'any',
+                str(request.has_monitor) if request.HasField('has_monitor') else 'any',
+                str(request.available_only),
+                request.start_time or '',
+                request.end_time or ''
+            ]
+            cache_key = f"seats:{':'.join(cache_key_parts)}"
+            lock_key = f"{cache_key}:lock"
 
-            if request.branch:
-                query += ' AND branch = %s'
-                params.append(request.branch)
-
-            if request.area:
-                query += ' AND area = %s'
-                params.append(request.area)
-
-            if request.HasField('has_power'):
-                query += ' AND has_power = %s'
-                params.append(request.has_power)
-
-            if request.HasField('has_monitor'):
-                query += ' AND has_monitor = %s'
-                params.append(request.has_monitor)
-
-            query += ' ORDER BY id'
-
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute(query, params)
-            seats = cur.fetchall()
-            cur.close()
-            return_db_connection(conn)
-
-            result_seats = []
-            for seat in seats:
-                if request.start_time and request.end_time:
-                    is_available = self.get_seat_availability(seat['id'], request.start_time, request.end_time)
-                else:
-                    is_available = self.get_seat_availability(seat['id'])
-
-                if not request.available_only or is_available:
-                    result_seats.append(library_pb2.Seat(
+            def build_response_from_cache(payload: str):
+                cached_seats = json.loads(payload)
+                seat_messages = [
+                    library_pb2.Seat(
                         id=seat['id'],
                         branch=seat['branch'],
-                        area=seat['area'] or '',
+                        area=seat.get('area', ''),
                         has_power=seat['has_power'],
                         has_monitor=seat['has_monitor'],
                         status=seat['status'],
-                        is_available=is_available
-                    ))
+                        is_available=seat['is_available']
+                    )
+                    for seat in cached_seats
+                ]
+                return library_pb2.GetSeatsResponse(seats=seat_messages, count=len(seat_messages))
+
+            cached_payload = redis_client.get(cache_key)
+            if cached_payload:
+                return build_response_from_cache(cached_payload)
+
+            acquired_lock = redis_client.set(lock_key, "1", nx=True, ex=10)
+            if not acquired_lock:
+                for _ in range(50):
+                    time.sleep(0.1)
+                    cached_payload = redis_client.get(cache_key)
+                    if cached_payload:
+                        return build_response_from_cache(cached_payload)
+                acquired_lock = redis_client.set(lock_key, "1", nx=True, ex=10)
+
+            availability_clause = """
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM reservations r
+                        WHERE r.seat_id = s.id
+                        AND r.status IN ('CONFIRMED', 'CHECKED_IN')
+                        AND r.start_time <= NOW()
+                        AND r.end_time > NOW()
+                    )
+                    THEN FALSE
+                    ELSE TRUE
+                END AS is_available
+            """
+
+            params = []
+            query_filters = []
+
+            if request.branch:
+                query_filters.append('s.branch = %s')
+                params.append(request.branch)
+
+            if request.area:
+                query_filters.append('s.area = %s')
+                params.append(request.area)
+
+            if request.HasField('has_power'):
+                query_filters.append('s.has_power = %s')
+                params.append(request.has_power)
+
+            if request.HasField('has_monitor'):
+                query_filters.append('s.has_monitor = %s')
+                params.append(request.has_monitor)
+
+            if request.start_time and request.end_time:
+                availability_clause = """
+                    CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM reservations r
+                            WHERE r.seat_id = s.id
+                            AND r.status NOT IN ('CANCELLED', 'NO_SHOW')
+                            AND tsrange(r.start_time, r.end_time) && tsrange(%s, %s)
+                        )
+                        THEN FALSE
+                        ELSE TRUE
+                    END AS is_available
+                """
+                params.append(request.start_time)
+                params.append(request.end_time)
+
+            query = f"""
+                SELECT
+                    s.id,
+                    s.branch,
+                    s.area,
+                    s.has_power,
+                    s.has_monitor,
+                    s.status,
+                    {availability_clause}
+                FROM seats s
+            """
+
+            if query_filters:
+                query += ' WHERE ' + ' AND '.join(query_filters)
+
+            query += ' ORDER BY s.id'
+
+            conn = None
+            cur = None
+            try:
+                with db_semaphore:
+                    conn = get_db_connection()
+                    cur = conn.cursor(cursor_factory=RealDictCursor)
+                    cur.execute(query, params)
+                    seats = cur.fetchall()
+            except Exception:
+                if acquired_lock:
+                    redis_client.delete(lock_key)
+                raise
+            finally:
+                if cur:
+                    cur.close()
+                if conn:
+                    return_db_connection(conn)
+
+            result_payload = []
+            result_seats = []
+            for seat in seats:
+                seat_info = {
+                    'id': seat['id'],
+                    'branch': seat['branch'],
+                    'area': seat['area'] or '',
+                    'has_power': seat['has_power'],
+                    'has_monitor': seat['has_monitor'],
+                    'status': seat['status'],
+                    'is_available': seat['is_available']
+                }
+
+                if not request.available_only or seat_info['is_available']:
+                    result_payload.append(seat_info)
+                    result_seats.append(library_pb2.Seat(**seat_info))
+
+            if acquired_lock:
+                redis_client.setex(cache_key, 30, json.dumps(result_payload))
+                redis_client.delete(lock_key)
 
             return library_pb2.GetSeatsResponse(seats=result_seats, count=len(result_seats))
 
         except Exception as e:
+            print(f"[GetSeats] error: {e}")
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return library_pb2.GetSeatsResponse()
@@ -684,13 +787,15 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
             cur.close()
             return_db_connection(conn)
 
+            desired_time = waitlist_entry['desired_time']
+
             return library_pb2.AddToWaitlistResponse(
                 entry=library_pb2.WaitlistEntry(
                     id=waitlist_entry['id'],
                     user_id=waitlist_entry['user_id'],
                     seat_id=waitlist_entry['seat_id'] if waitlist_entry['seat_id'] else 0,
                     branch=waitlist_entry['branch'] or '',
-                    desired_time=waitlist_entry['desired_time'] or '',
+                    desired_time=str(desired_time) if desired_time else '',
                     created_at=str(waitlist_entry['created_at'])
                 )
             )

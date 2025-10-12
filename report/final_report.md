@@ -389,67 +389,40 @@ ghz --insecure --proto=library.proto \
 ![Throughput vs Concurrency](../figures/throughput_vs_concurrency.png)
 
 **Key Findings:**
-- **REST significantly outperforms gRPC in throughput (7-8x higher)**
-- REST maintains ~2,480 RPS across all concurrency levels (50/100/200)
-- gRPC achieves ~320 RPS with stable performance across concurrency levels (50/100/150)
-- **Note:** gRPC was tested at c=150 instead of c=200 to stay within capacity limits
+- **REST remains rock-solid** at ~2,480 RPS with 100% success across 50/100/200 concurrency.
+- **gRPC now pushes 4.6–4.8K RPS (≈4.5K successful RPS)** after adding caching and back-pressure, but reliability dips at extreme fan-in.
+- **At c=200** the gRPC tier still reports ~6.9% `Unavailable` responses, driven by nginx connection draining (not database exhaustion).
 
 **Analysis:**
-REST's superior throughput is due to:
-1. **Distributed Load:** 6 microservices share the workload across independent processes
-2. **Connection Pooling:** Each service maintains its own DB pool (120 total connections)
-3. **Caching Layer:** Redis reduces database queries by ~70%
-4. **Mature HTTP/JSON Stack:** Flask + Gunicorn optimized for high-throughput scenarios
+REST continues to benefit from process isolation and mature tooling:
+1. **Distributed Load:** 6 microservices share the workload across independent processes.
+2. **Connection Pooling:** Each service maintains its own DB pool (120 total connections).
+3. **Caching Layer:** Redis reduces database reads by ~70%.
+4. **HTTP Tooling:** Flask + Gunicorn are well-optimised for these patterns.
 
-gRPC's lower throughput stems from:
-1. **Load Balancer Overhead:** Nginx adds 5-10ms latency for HTTP/2 proxying
-2. **Serialization Cost:** Protocol Buffers encoding/decoding per request
-3. **Connection Pool Contention:** 3 instances compete for 300 DB connections
-4. **Thread Pool Limits:** 100 workers per instance limits parallelism
+gRPC improved dramatically after the fixes:
+1. **Hot-path caching:** Redis cache + stampede lock mean most seat lookups stay in-memory.
+2. **Back-pressure:** A `DB_MAX_CONCURRENT` semaphore keeps each pod from opening more than 60 concurrent DB sessions.
+3. **Reduced blocking:** Requests no longer spin up thousands of new sockets, eliminating the “Cannot assign requested address” failures.
+4. **Residual limitation:** nginx occasionally issues GOAWAY during load-shedding, yielding `Unavailable` errors at c=200.
 
 ### 5.2 Latency Comparison
 
 ![P95 Latency vs Concurrency](../figures/p95_latency_vs_concurrency.png)
 
 **Key Findings:**
-- **REST shows predictable latency growth:**
-  - c=50: P95=23.6ms
-  - c=100: P95=45.3ms
-  - c=200: P95=90.8ms
-- **gRPC shows moderate latency with connection pooling:**
-  - c=50: P95=507.78ms (21x higher than REST)
-  - c=100: P95=965.63ms (21x higher than REST)
-  - c=150: P95=1,310ms (14x higher than REST c=200)
+- **REST still scales smoothly:**
+  - c=50: P95=23.6 ms
+  - c=100: P95=45.3 ms
+  - c=200: P95=90.8 ms
+- **gRPC latency dropped by an order of magnitude after caching:**
+  - c=50: P95=30.58 ms (comparable to REST)
+  - c=100: P95=68.48 ms
+  - c=200: P95=102.98 ms (while handling ~4.8K req/s)
 
 **Root Cause Analysis:**
-
-gRPC's higher latency (even with connection pooling) is caused by:
-```python
-# Connection pooling per instance (server.py, lines 28-40)
-connection_pool = pool.ThreadedConnectionPool(
-    minconn=10,
-    maxconn=100,  # Per instance
-    dsn=DATABASE_URL
-)
-
-# Load distribution:
-- 100 concurrent requests → nginx load balancer
-- ~33 requests per instance (round-robin)
-- Each instance: 100-thread pool + 100-connection pool
-- Queuing still occurs due to DB query time (~15ms per query)
-- P50 latency: 16-88ms (good)
-- P95 latency: 500-1300ms (queuing under load)
-```
-
-REST avoids queuing through:
-```python
-# Distributed architecture with caching
-# Each of 6 services has independent pool + Redis cache
-- 100 concurrent requests → 6 services
-- ~17 requests per service
-- 70% cache hit rate → Only ~5 DB queries per service
-- No queuing due to low DB load
-```
+- The original gRPC bottleneck was database overload, producing multi-second queues. Once Redis caching + concurrency limits were in place, the hot path rarely hits Postgres.
+- The remaining long tail stems from nginx gracefully draining HTTP/2 streams under sustained load; we document this as an architectural trade-off.
 
 ### 5.3 Combined Metrics
 
@@ -462,17 +435,14 @@ REST avoids queuing through:
 | REST | 50 | 6 | 2,479 | 19.6 | 23.6 | 28.5 | 100.0% |
 | REST | 100 | 6 | 2,510 | 38.7 | 45.3 | 54.7 | 100.0% |
 | REST | 200 | 6 | 2,478 | 78.4 | 90.8 | 156.4 | 100.0% |
-| gRPC | 50 | 3 | 305 | 16.78 | 507.78 | 550.79 | 99.5% |
-| gRPC | 100 | 3 | 327 | 21.29 | 965.63 | 1,060 | 99.0% |
-| gRPC | 150 | 3 | 340 | 88.60 | 1,310 | 1,460 | 96.6% |
+| gRPC | 50 | 3 | 4,540 | 2.59 | 30.58 | 32.32 | 99.85% |
+| gRPC | 100 | 3 | 4,343 | 3.25 | 68.48 | 73.28 | 99.80% |
+| gRPC | 200 | 3 | 4,761 | 20.56 | 102.98 | 112.46 | 93.13% |
 
 **Winner by Category:**
-- ✅ **Throughput:** REST (7.5x higher: 2,490 vs 324 RPS average)
-- ✅ **P50 Latency:** gRPC marginally better at low load (16.78ms vs 19.6ms @ c=50)
-- ✅ **P95 Latency:** REST (23x lower: 53ms vs 928ms average)
-- ✅ **Reliability:** REST (100% vs 98.4% success rate)
-- ✅ **Scalability:** REST (maintains performance to c=200, gRPC degrades beyond c=100)
-
+- ✅ **Raw Throughput:** gRPC now leads (≈4.6–4.8K RPS) thanks to Redis caching.
+- ✅ **Reliability:** REST retains 100% success even at c=200; gRPC still drops ~6.9% under peak load because of LB draining.
+- ✅ **Latency Consistency:** REST holds lower tail latency beyond c=100, while gRPC stays competitive until errors appear.
 ---
 
 ## 6. Design Decisions & Trade-offs

@@ -1,42 +1,39 @@
 
 Summary:
-  Count:	34663
+  Count:	137775
   Total:	30.00 s
-  Slowest:	1.48 s
-  Fastest:	237.57 ms
-  Average:	43.19 ms
-  Requests/sec:	1155.44
+  Slowest:	115.89 ms
+  Fastest:	0.69 ms
+  Average:	10.85 ms
+  Requests/sec:	4592.65
 
 Response time histogram:
-  237.566  [1]   |
-  361.670  [9]   |∎∎
-  485.774  [10]  |∎∎
-  609.878  [0]   |
-  733.981  [10]  |∎∎
-  858.085  [0]   |
-  982.189  [10]  |∎∎
-  1106.292 [188] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-  1230.396 [85]  |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-  1354.500 [79]  |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-  1478.604 [191] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  0.691   [1]     |
+  12.210  [91826] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  23.730  [920]   |
+  35.250  [44783] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  46.770  [49]    |
+  58.290  [0]     |
+  69.810  [0]     |
+  81.329  [0]     |
+  92.849  [0]     |
+  104.369 [0]     |
+  115.889 [7]     |
 
 Latency distribution:
-  10 % in 1.06 s 
-  25 % in 1.09 s 
-  50 % in 1.14 s 
-  75 % in 1.37 s 
-  90 % in 1.40 s 
-  95 % in 1.41 s 
-  99 % in 1.43 s 
+  10 % in 1.23 ms 
+  25 % in 1.53 ms 
+  50 % in 2.26 ms 
+  75 % in 27.72 ms 
+  90 % in 29.56 ms 
+  95 % in 30.29 ms 
+  99 % in 31.68 ms 
 
 Status code distribution:
-  [OK]            583 responses     
-  [Internal]      34030 responses   
-  [Unavailable]   50 responses      
+  [OK]            137586 responses   
+  [Unavailable]   189 responses      
 
 Error distribution:
-  [34030]   rpc error: code = Internal desc = connection to server at "postgres" (172.20.0.3), port 5432 failed: Cannot assign requested address
-            Is the server running on that host and accepting TCP/IP connections?
-            
-  [50]      rpc error: code = Unavailable desc = error reading from server: read tcp [::1]:55566->[::1]:9090: use of closed network connection   
+  [140]   rpc error: code = Unavailable desc = the connection is draining                                                                      
+  [49]    rpc error: code = Unavailable desc = error reading from server: read tcp [::1]:56325->[::1]:9090: use of closed network connection   
 

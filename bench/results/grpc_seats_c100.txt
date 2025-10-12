@@ -1,23 +1,39 @@
 
 Summary:
-  Count:	64352
+  Count:	136562
   Total:	30.00 s
-  Slowest:	0 ns
-  Fastest:	0 ns
-  Average:	46.54 ms
-  Requests/sec:	2145.05
+  Slowest:	110.84 ms
+  Fastest:	0.61 ms
+  Average:	21.93 ms
+  Requests/sec:	4552.01
 
 Response time histogram:
+  0.608   [1]     |
+  11.631  [90497] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  22.654  [385]   |
+  33.677  [139]   |
+  44.700  [159]   |
+  55.723  [1523]  |∎
+  66.746  [42518] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  77.770  [1056]  |
+  88.793  [0]     |
+  99.816  [0]     |
+  110.839 [19]    |
 
 Latency distribution:
+  10 % in 1.25 ms 
+  25 % in 1.61 ms 
+  50 % in 2.52 ms 
+  75 % in 60.06 ms 
+  90 % in 62.76 ms 
+  95 % in 63.97 ms 
+  99 % in 66.37 ms 
 
 Status code distribution:
-  [Internal]      64252 responses   
-  [Unavailable]   100 responses     
+  [Unavailable]   265 responses      
+  [OK]            136297 responses   
 
 Error distribution:
-  [64252]   rpc error: code = Internal desc = connection to server at "postgres" (172.20.0.3), port 5432 failed: Cannot assign requested address
-            Is the server running on that host and accepting TCP/IP connections?
-            
-  [100]     rpc error: code = Unavailable desc = error reading from server: read tcp [::1]:55571->[::1]:9090: use of closed network connection   
+  [167]   rpc error: code = Unavailable desc = the connection is draining                                                                      
+  [98]    rpc error: code = Unavailable desc = error reading from server: read tcp [::1]:56473->[::1]:9090: use of closed network connection   
 

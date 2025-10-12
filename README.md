@@ -407,7 +407,57 @@ python client_test.py
 
 ## Performance Benchmarking
 
-### Run Benchmarks
+### One-Click Reproduction
+
+```bash
+# Runs REST e2e tests, gRPC client tests, ghz benchmarks (c=50/100/200),
+# saves raw outputs under bench/results/runs/<timestamp>.
+./scripts/reproduce_all.sh
+
+# Same as above, but also refreshes bench/performance_comparison.csv
+# and regenerates figures/ with the new baseline.
+./scripts/reproduce_all.sh --update-baseline
+```
+
+Dependencies: Docker, `curl`, `jq`, `ghz`, and `python3` available on the host.
+
+> ⚠️ The script starts by running `docker compose down --volumes` to ensure a clean seed.
+>    Any existing containers/volumes for this project will be removed.
+
+If you previously ran an older version of the stack (or used a different `.env`), run the following once from the
+repository root to wipe stale containers/volumes before starting:
+
+```bash
+docker compose down --volumes --remove-orphans
+cp .env.example .env  # ensure canonical credentials are in place
+```
+
+#### Host prerequisites (macOS/Homebrew)
+
+The script calls local Python to run `grpc/client_test.py` and therefore needs a Python environment with `grpcio`, `grpcio-tools`, and `psycopg2-binary`. One way to prepare it:
+
+```bash
+# Install tooling (only once)
+brew install python@3.11 libpq ghz jq
+echo 'export PATH="/opt/homebrew/opt/libpq/bin:$PATH"' >> ~/.zprofile
+source ~/.zprofile
+
+# Create / activate venv (regenerate if you already had one)
+/opt/homebrew/opt/python@3.11/bin/python3.11 -m venv .venv
+source .venv/bin/activate
+export PATH="/opt/homebrew/opt/libpq/bin:$PATH"  # ensure pg_config is visible
+
+# Install Python deps needed by the reproduction script
+python3.11 -m pip install --upgrade pip wheel setuptools
+python3.11 -m pip install -r grpc/app/requirements.txt
+
+# Run the workflow
+./scripts/reproduce_all.sh          # or add --update-baseline if desired
+```
+
+(If you prefer not to configure the host environment, you can follow the Docker commands below and run each step inside the containers.)
+
+### Manual Benchmark Workflow (optional)
 
 ```bash
 # Install Apache Bench (if not installed)
@@ -491,6 +541,7 @@ dlsms/
 │   └── seed.sql               # 50 seats, 10 users, sample data
 │
 ├── scripts/                    # Testing & Benchmarking
+│   ├── reproduce_all.sh       # One-click reproduction (tests + benchmarks + graphs)
 │   ├── test_rest.sh           # REST API comprehensive tests
 │   ├── test_grpc.sh           # gRPC API tests
 │   ├── benchmark.sh           # Performance benchmarks
@@ -626,6 +677,9 @@ JWT_EXPIRATION_HOURS=24
 
 # Check-in
 GRACE_MINUTES=15
+
+# gRPC concurrency guard
+DB_MAX_CONCURRENT=60
 ```
 
 ## Troubleshooting
@@ -658,8 +712,9 @@ GRACE_MINUTES=15
 - Configure database connection pooling
 
 ### gRPC
-- Modify ThreadPoolExecutor workers: `max_workers=10`
-- Adjust gRPC channel options for throughput
+- Modify ThreadPoolExecutor workers: `max_workers=100` (align with connection pool)
+- Tune gRPC channel options / keep-alives for long-lived streams
+- Adjust `DB_MAX_CONCURRENT` if Postgres capacity changes
 - Enable gRPC compression for large responses
 
 ### Database

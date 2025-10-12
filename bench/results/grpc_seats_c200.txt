@@ -1,42 +1,40 @@
 
 Summary:
-  Count:	32859
+  Count:	147269
   Total:	30.00 s
-  Slowest:	5.71 s
-  Fastest:	316.88 ms
-  Average:	182.51 ms
-  Requests/sec:	1095.28
+  Slowest:	148.29 ms
+  Fastest:	0.73 ms
+  Average:	40.70 ms
+  Requests/sec:	4908.89
 
 Response time histogram:
-  316.884  [1]   |
-  856.219  [59]  |∎∎∎∎∎∎∎∎∎∎∎∎∎
-  1395.553 [43]  |∎∎∎∎∎∎∎∎∎∎
-  1934.888 [35]  |∎∎∎∎∎∎∎∎
-  2474.223 [28]  |∎∎∎∎∎∎
-  3013.557 [22]  |∎∎∎∎∎
-  3552.892 [23]  |∎∎∎∎∎
-  4092.227 [26]  |∎∎∎∎∎∎
-  4631.561 [80]  |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-  5170.896 [86]  |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-  5710.231 [180] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  0.730   [1]     |
+  15.486  [30789] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  30.242  [45818] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  44.999  [5047]  |∎∎∎∎
+  59.755  [14845] |∎∎∎∎∎∎∎∎∎∎∎∎∎
+  74.511  [6280]  |∎∎∎∎∎
+  89.267  [3873]  |∎∎∎
+  104.023 [27926] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  118.779 [2262]  |∎∎
+  133.535 [210]   |
+  148.291 [26]    |
 
 Latency distribution:
-  10 % in 799.41 ms 
-  25 % in 2.05 s 
-  50 % in 4.48 s 
-  75 % in 5.39 s 
-  90 % in 5.61 s 
-  95 % in 5.64 s 
-  99 % in 5.68 s 
+  10 % in 14.46 ms 
+  25 % in 15.69 ms 
+  50 % in 20.27 ms 
+  75 % in 74.71 ms 
+  90 % in 94.63 ms 
+  95 % in 96.87 ms 
+  99 % in 107.25 ms 
 
 Status code distribution:
-  [Internal]      32076 responses   
-  [OK]            583 responses     
-  [Unavailable]   200 responses     
+  [OK]            137077 responses   
+  [Unavailable]   10192 responses    
 
 Error distribution:
-  [200]     rpc error: code = Unavailable desc = error reading from server: read tcp [::1]:55579->[::1]:9090: use of closed network connection   
-  [32076]   rpc error: code = Internal desc = connection to server at "postgres" (172.20.0.3), port 5432 failed: Cannot assign requested address
-            Is the server running on that host and accepting TCP/IP connections?
-            
+  [9994]   rpc error: code = Unavailable desc = the connection is draining                                                                                                                                                                  
+  [113]    rpc error: code = Unavailable desc = error reading from server: read tcp [::1]:56622->[::1]:9090: use of closed network connection                                                                                               
+  [85]     rpc error: code = Unavailable desc = closing transport due to: connection error: desc = "error reading from server: read tcp [::1]:56621->[::1]:9090: use of closed network connection", received prior goaway: code: NO_ERROR   
 

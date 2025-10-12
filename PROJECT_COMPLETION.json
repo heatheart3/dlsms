@@ -271,9 +271,9 @@
     },
     "caching": {
       "technology": "Redis",
-      "cache_key_pattern": "seats:all, seats:branch:{name}",
-      "ttl": "300 seconds",
-      "performance_gain": "3x faster seat queries"
+      "cache_key_pattern": "seats:{filters}",
+      "ttl": "30 seconds",
+      "performance_gain": "≈10x faster gRPC seat queries after cache warm-up"
     },
     "auto_release": {
       "mechanism": "Background worker polling every 60 seconds",
@@ -308,11 +308,17 @@
       "status": "RESOLVED"
     },
     {
-      "issue": "gRPC performance degradation under high load",
-      "root_cause": "Database connection pool too small (20 connections) for monolithic architecture",
-      "solution": "Documented as architectural limitation; microservices perform better",
-      "recommendation": "Increase pool size or switch to REST for production",
-      "status": "DOCUMENTED"
+      "issue": "gRPC performance collapse (>98% errors at c=200)",
+      "root_cause": "Cache stampede + unbounded DB fan-out exhausted OS ports and triggered nginx GOAWAY",
+      "solution": "Added Redis caching with stampede lock, introduced DB_MAX_CONCURRENT semaphore, regenerated benchmarks",
+      "files_modified": [
+        "grpc/app/server.py",
+        "bench/results/grpc_seats_c50_optimized.txt",
+        "bench/results/grpc_seats_c100_optimized.txt",
+        "bench/results/grpc_seats_c200_optimized.txt",
+        "bench/results/grpc_performance_fixed.csv"
+      ],
+      "status": "RESOLVED"
     }
   ],
 

@@ -11,6 +11,10 @@ from pathlib import Path
 # Use non-interactive backend
 matplotlib.use('Agg')
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+BENCH_DIR = ROOT_DIR / 'bench'
+FIGURES_DIR = ROOT_DIR / 'figures'
+
 def load_data(csv_path):
     """Load benchmark data from CSV"""
     data = {'REST': [], 'gRPC': []}
@@ -141,11 +145,10 @@ def generate_combined_metrics_graph(data, output_path):
     print(f"✓ Generated: {output_path}")
 
 def main():
-    bench_dir = Path('/Users/muhanzhang/Documents/coding/project2/dlsms/bench')
-    figures_dir = Path('/Users/muhanzhang/Documents/coding/project2/dlsms/figures')
+    figures_dir = FIGURES_DIR
     figures_dir.mkdir(exist_ok=True)
 
-    csv_path = bench_dir / 'performance_comparison.csv'
+    csv_path = BENCH_DIR / 'performance_comparison.csv'
 
     if not csv_path.exists():
         print(f"ERROR: {csv_path} not found!")

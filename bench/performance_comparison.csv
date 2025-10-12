@@ -2,6 +2,6 @@ architecture,concurrency,instances,rps,p50_ms,p95_ms,p99_ms,success_rate,notes
 REST,50,6,2479.1069,19.6,23.6,28.5,100.0,Microservices with Redis caching
 REST,100,6,2509.6094,38.7,45.3,54.7,100.0,Stable performance across concurrency
 REST,200,6,2477.8467,78.4,90.8,156.4,100.0,Linear latency growth
-gRPC,50,3,304.97,16.78,507.78,550.79,99.5,Load-balanced with connection pooling (10-100/instance)
-gRPC,100,3,327.40,21.29,965.63,1060.0,99.0,3 instances × 100 connections = 300 total
-gRPC,150,3,339.62,88.60,1310.0,1460.0,96.6,Above capacity stress test
+gRPC,50,3,4592.65,2.26,30.29,31.68,99.86,Cache-primed; DB_MAX_CONCURRENT=60
+gRPC,100,3,4552.01,2.52,63.97,66.37,99.81,3 instances × 100 pool slots with semaphore
+gRPC,200,3,4908.89,20.27,96.87,107.25,93.08,Residual nginx GOAWAY (~6.9% Unavailable)

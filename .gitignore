@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.so
+.DS_Store
+bench/.DS_Store
+bench/results/.DS_Store
+bench/results/runs/
+grpc/__pycache__/
+rest/__pycache__/
+scripts/__pycache__/
+*.log
