@@ -23,9 +23,14 @@ docker compose --profile grpc up -d
 ./test_rest_e2e.sh
 python3 grpc/client_test.py
 
-# Run Benchmarks (requires hey and ghz)
-./scripts/run_rest_benchmark.sh
-./scripts/run_grpc_benchmark.sh
+# Run Benchmarks
+# Option A (hey-based):
+./scripts/run_rest_benchmark.sh   # requires a local 'hey' that forwards headers correctly
+./scripts/run_grpc_benchmark.sh   # requires 'ghz'
+
+# Option B (ab-based, recommended if your 'hey' drops Authorization headers):
+./scripts/benchmark.sh            # uses ApacheBench (ab) and curl; no 'hey' needed
+
 python3 scripts/generate_graphs.py
 ```
 
@@ -407,6 +412,22 @@ python client_test.py
 
 ## Performance Benchmarking
 
+### Reproduction Notes
+
+- Seed users: `S2021001`–`S2021010` with password `password123` (from database seed). Always use uppercase student IDs.
+- Get a JWT via the gateway and pass it in the Authorization header:
+  ```bash
+  TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"student_id":"S2021001","password":"password123"}' | jq -r .token)
+  # Quick check
+  curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8080/seats?available_only=true' | jq '.count'
+  ```
+- Tooling caveat: some `hey` builds may not forward custom headers reliably on certain platforms. If you see 401 responses during REST benchmarks, prefer the `ab`-based script:
+  ```bash
+  ./scripts/benchmark.sh   # uses ApacheBench (ab) + curl
+  ```
+
 ### One-Click Reproduction
 
 ```bash
@@ -419,7 +440,7 @@ python client_test.py
 ./scripts/reproduce_all.sh --update-baseline
 ```
 
-Dependencies: Docker, `curl`, `jq`, `ghz`, and `python3` available on the host.
+Dependencies: Docker, `curl`, `jq`, `ghz`, and `python3` available on the host. `hey` is not required for the one‑click flow.
 
 > ⚠️ The script starts by running `docker compose down --volumes` to ensure a clean seed.
 >    Any existing containers/volumes for this project will be removed.
@@ -439,6 +460,8 @@ The script calls local Python to run `grpc/client_test.py` and therefore needs a
 ```bash
 # Install tooling (only once)
 brew install python@3.11 libpq ghz jq
+# Optional: ab for REST benchmarks without hey
+brew install httpd   # provides 'ab'
 echo 'export PATH="/opt/homebrew/opt/libpq/bin:$PATH"' >> ~/.zprofile
 source ~/.zprofile
 
@@ -698,6 +721,7 @@ DB_MAX_CONCURRENT=60
 - Verify JWT_SECRET matches across services
 - Check token expiration (default 24 hours)
 - Ensure Authorization header format: `Bearer {token}`
+- If 401 occurs only when using `hey` under concurrency, verify a single request via `curl` works, then switch to `./scripts/benchmark.sh` (ab‑based) for REST benchmarks.
 
 ### Reservation conflicts not working
 - Verify btree_gist extension loaded
