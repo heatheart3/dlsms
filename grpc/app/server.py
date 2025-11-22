@@ -21,6 +21,9 @@ import library_pb2_grpc
 import raft_pb2
 import raft_pb2_grpc
 
+# Shared Raft node instance for logging hooks
+RAFT_NODE_INSTANCE = None
+
 DATABASE_URL = os.getenv('DATABASE_URL')
 REDIS_URL = os.getenv('REDIS_URL')
 JWT_SECRET = os.getenv('JWT_SECRET', 'your-secret-key')
@@ -115,6 +118,28 @@ def parse_peer_config(raw_peers, node_id, self_address=None):
 
         peers.append({'id': peer_id or address, 'address': address})
     return peers
+
+
+def submit_raft_operation_log(operation: str):
+    """Send a best-effort operation log to the Raft leader for replication."""
+    node = RAFT_NODE_INSTANCE
+    if not node:
+        return
+    leader_address = node._get_leader_address() or node.self_address
+    if not leader_address:
+        return
+    leader_id = node.leader_id or node.node_id
+    try:
+        stub = node._get_stub_by_address(leader_address, leader_id)
+        node._log_client("SubmitOperation", leader_id)
+        response = stub.SubmitOperation(
+            raft_pb2.OperationRequest(operation=operation, source_id=node.node_id),
+            timeout=RAFT_RPC_TIMEOUT
+        )
+        if not response.success:
+            print(f"[Raft] Operation log not committed: {response.result}")
+    except Exception as e:
+        print(f"[Raft] Failed to submit operation log: {e}")
 
 
 class RaftNode(raft_pb2_grpc.RaftServiceServicer):
@@ -475,6 +500,8 @@ class AuthServiceServicer(library_pb2_grpc.AuthServiceServicer):
                 cur.close()
                 return_db_connection(conn)
 
+                submit_raft_operation_log(f"Register user {user['id']} ({user['student_id']})")
+
                 return library_pb2.RegisterResponse(
                     token=token,
                     user_id=user['id'],
@@ -505,6 +532,38 @@ class AuthServiceServicer(library_pb2_grpc.AuthServiceServicer):
             )
         except Exception as e:
             return library_pb2.VerifyResponse(valid=False)
+
+
+class OperationServiceServicer(library_pb2_grpc.OperationServiceServicer):
+    def __init__(self, raft_node: 'RaftNode'):
+        self.raft_node = raft_node
+
+    def SubmitOperation(self, request, context):
+        # Forward through Raft service to ensure log replication and proper logging
+        operation = request.operation or "noop"
+        target_address = self.raft_node._get_leader_address() or self.raft_node.self_address
+        target_id = self.raft_node.leader_id or self.raft_node.node_id
+
+        if not target_address:
+            return library_pb2.OperationResponse(
+                success=False, result="No leader available", leader_id=self.raft_node.leader_id or ""
+            )
+
+        try:
+            stub = self.raft_node._get_stub_by_address(target_address, target_id)
+            self.raft_node._log_client("SubmitOperation", target_id)
+            raft_resp = stub.SubmitOperation(
+                raft_pb2.OperationRequest(operation=operation, source_id=request.source_id or self.raft_node.node_id),
+                timeout=RAFT_RPC_TIMEOUT,
+            )
+            return library_pb2.OperationResponse(
+                success=raft_resp.success, result=raft_resp.result, leader_id=raft_resp.leader_id
+            )
+        except Exception as e:
+            print(f"[OperationService] SubmitOperation failed: {e}")
+            return library_pb2.OperationResponse(
+                success=False, result=str(e), leader_id=self.raft_node.leader_id or ""
+            )
 
 class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
     def get_seat_availability(self, seat_id, start_time=None, end_time=None):
@@ -829,6 +888,10 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
                 invalidate_seat_cache(request.seat_id)
 
+                submit_raft_operation_log(
+                    f"CreateReservation id={reservation['id']} user={reservation['user_id']} seat={reservation['seat_id']}"
+                )
+
                 return library_pb2.CreateReservationResponse(
                     reservation=library_pb2.Reservation(
                         id=reservation['id'],
@@ -968,6 +1031,8 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
             invalidate_seat_cache(reservation['seat_id'])
 
+            submit_raft_operation_log(f"CheckIn reservation id={updated_reservation['id']}")
+
             return library_pb2.CheckInResponse(
                 reservation=library_pb2.Reservation(
                     id=updated_reservation['id'],
@@ -1027,6 +1092,8 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
             return_db_connection(conn)
 
             invalidate_seat_cache(reservation['seat_id'])
+
+            submit_raft_operation_log(f"CancelReservation id={cancelled_reservation['id']}")
 
             return library_pb2.CancelReservationResponse(
                 reservation=library_pb2.Reservation(
@@ -1118,6 +1185,8 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
 
             desired_time = waitlist_entry['desired_time']
 
+            submit_raft_operation_log(f"AddToWaitlist id={waitlist_entry['id']} user={waitlist_entry['user_id']}")
+
             return library_pb2.AddToWaitlistResponse(
                 entry=library_pb2.WaitlistEntry(
                     id=waitlist_entry['id'],
@@ -1186,6 +1255,8 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
             cur.close()
             return_db_connection(conn)
 
+            submit_raft_operation_log(f"RemoveFromWaitlist id={deleted['id']}")
+
             return library_pb2.RemoveFromWaitlistResponse(
                 message='Removed from waitlist',
                 id=deleted['id']
@@ -1236,6 +1307,8 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
 
                 cur.close()
                 return_db_connection(conn)
+
+                submit_raft_operation_log(f"NotifyUsers waitlist_id={waitlist_entry['id']} user_id={waitlist_entry['user_id']}")
 
                 return library_pb2.NotifyUsersResponse(
                     notified=True,
@@ -1395,6 +1468,9 @@ def serve():
         peers=parse_peer_config(RAFT_PEERS_RAW, RAFT_NODE_ID, RAFT_SELF_ADDRESS),
         self_address=RAFT_SELF_ADDRESS
     )
+    global RAFT_NODE_INSTANCE
+    RAFT_NODE_INSTANCE = raft_servicer
+    library_pb2_grpc.add_OperationServiceServicer_to_server(OperationServiceServicer(raft_servicer), server)
     raft_pb2_grpc.add_RaftServiceServicer_to_server(raft_servicer, server)
 
     server.add_insecure_port('[::]:9090')

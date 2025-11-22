@@ -30,6 +30,10 @@ service NotifyService {
     rpc NotifyUsers(NotifyUsersRequest) returns (NotifyUsersResponse);
 }
 
+service OperationService {
+    rpc SubmitOperation(OperationRequest) returns (OperationResponse);
+}
+
 message LoginRequest {
     string student_id = 1;
     string password = 2;
@@ -197,6 +201,17 @@ message GetUserReservationsRequest {
 message GetUserReservationsResponse {
     repeated ReservationDetail reservations = 1;
     int32 count = 2;
+}
+
+message OperationRequest {
+    string operation = 1;
+    string source_id = 2;
+}
+
+message OperationResponse {
+    bool success = 1;
+    string result = 2;
+    string leader_id = 3;
 }
 
 message AddToWaitlistRequest {
