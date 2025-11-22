@@ -165,6 +165,9 @@ services:
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS}
       - GRACE_MINUTES=${GRACE_MINUTES}
       - INSTANCE_ID=1
+      - RAFT_NODE_ID=grpc-app1
+      - RAFT_SELF_ADDRESS=grpc-app1:9090
+      - RAFT_PEERS=grpc-app1@grpc-app1:9090,grpc-app2@grpc-app2:9090,grpc-app3@grpc-app3:9090
     depends_on:
       postgres:
         condition: service_healthy
@@ -183,6 +186,9 @@ services:
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS}
       - GRACE_MINUTES=${GRACE_MINUTES}
       - INSTANCE_ID=2
+      - RAFT_NODE_ID=grpc-app2
+      - RAFT_SELF_ADDRESS=grpc-app2:9090
+      - RAFT_PEERS=grpc-app1@grpc-app1:9090,grpc-app2@grpc-app2:9090,grpc-app3@grpc-app3:9090
     depends_on:
       postgres:
         condition: service_healthy
@@ -201,6 +207,9 @@ services:
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS}
       - GRACE_MINUTES=${GRACE_MINUTES}
       - INSTANCE_ID=3
+      - RAFT_NODE_ID=grpc-app3
+      - RAFT_SELF_ADDRESS=grpc-app3:9090
+      - RAFT_PEERS=grpc-app1@grpc-app1:9090,grpc-app2@grpc-app2:9090,grpc-app3@grpc-app3:9090
     depends_on:
       postgres:
         condition: service_healthy

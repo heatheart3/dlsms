@@ -1,5 +1,6 @@
 import os
 import sys
+import random
 import grpc
 import psycopg2
 from psycopg2 import pool
@@ -13,8 +14,12 @@ from datetime import datetime, timedelta
 from concurrent import futures
 from psycopg2.extras import RealDictCursor
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import library_pb2
 import library_pb2_grpc
+import raft_pb2
+import raft_pb2_grpc
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 REDIS_URL = os.getenv('REDIS_URL')
@@ -23,6 +28,12 @@ JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')
 JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
 GRACE_MINUTES = int(os.getenv('GRACE_MINUTES', '15'))
 DB_MAX_CONCURRENT = int(os.getenv('DB_MAX_CONCURRENT', '60'))
+RAFT_HEARTBEAT_INTERVAL = 1.0
+RAFT_ELECTION_TIMEOUT_RANGE = (1.5, 3.0)
+RAFT_NODE_ID = str(os.getenv('RAFT_NODE_ID') or os.getenv('INSTANCE_ID') or 'node-1')
+RAFT_SELF_ADDRESS = os.getenv('RAFT_SELF_ADDRESS')
+RAFT_PEERS_RAW = os.getenv('RAFT_PEERS', '')
+RAFT_RPC_TIMEOUT = float(os.getenv('RAFT_RPC_TIMEOUT', '0.75'))
 
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 db_semaphore = threading.BoundedSemaphore(DB_MAX_CONCURRENT)
@@ -86,6 +97,324 @@ def invalidate_seat_cache(seat_id):
             redis_client.delete(key)
     except Exception as e:
         print(f"Cache invalidation error: {e}")
+
+
+def parse_peer_config(raw_peers, node_id, self_address=None):
+    peers = []
+    for raw in raw_peers.split(','):
+        entry = raw.strip()
+        if not entry:
+            continue
+        if '@' in entry:
+            peer_id, address = entry.split('@', 1)
+        else:
+            peer_id, address = entry, entry
+
+        if peer_id == node_id or (self_address and address == self_address):
+            continue
+
+        peers.append({'id': peer_id or address, 'address': address})
+    return peers
+
+
+class RaftNode(raft_pb2_grpc.RaftServiceServicer):
+    def __init__(self, node_id, peers, self_address=None):
+        self.node_id = str(node_id)
+        self.peers = peers
+        self.self_address = self_address
+        self.id_to_address = {}
+        if self_address:
+            self.id_to_address[self.node_id] = self_address
+        for peer in peers:
+            self.id_to_address[peer['id']] = peer['address']
+
+        self.current_term = 0
+        self.voted_for = None
+        self.leader_id = None
+        self.role = 'follower'
+        self.log = []
+        self.commit_index = 0
+        self.last_applied = 0
+        self.pending_events = {}
+        self.pending_results = {}
+
+        self.state_lock = threading.RLock()
+        self.stop_event = threading.Event()
+        self.last_heartbeat = time.time()
+        self.last_heartbeat_sent = 0.0
+        self.election_timeout = self._random_election_timeout()
+
+        self.peer_channels = {}
+        self.peer_stubs = {}
+        self.monitor_thread = None
+
+    def start(self):
+        if not self.monitor_thread:
+            self.monitor_thread = threading.Thread(target=self._run, daemon=True)
+            self.monitor_thread.start()
+
+    def _random_election_timeout(self):
+        return random.uniform(*RAFT_ELECTION_TIMEOUT_RANGE)
+
+    def _majority(self):
+        return (len(self.peers) + 1) // 2 + 1
+
+    def _log_client(self, rpc_name, peer_id):
+        print(f"Node {self.node_id} sends RPC {rpc_name} to Node {peer_id}")
+
+    def _should_step_down(self, response_term):
+        return response_term > self.current_term
+
+    def _get_stub(self, peer):
+        address = peer['address']
+        return self._get_stub_by_address(address, peer['id'])
+
+    def _get_stub_by_address(self, address, peer_id=None):
+        if address not in self.peer_stubs:
+            self.peer_channels[address] = grpc.insecure_channel(address)
+            self.peer_stubs[address] = raft_pb2_grpc.RaftServiceStub(self.peer_channels[address])
+        return self.peer_stubs[address]
+
+    def _reset_timer(self):
+        self.last_heartbeat = time.time()
+        self.election_timeout = self._random_election_timeout()
+
+    def _get_leader_address(self):
+        if self.leader_id and self.leader_id in self.id_to_address:
+            return self.id_to_address[self.leader_id]
+        if self.leader_id == self.node_id and self.self_address:
+            return self.self_address
+        return None
+
+    def _apply_commits_locked(self):
+        while self.last_applied < self.commit_index and self.last_applied < len(self.log):
+            entry = self.log[self.last_applied]
+            result = f"Executed {entry['operation']} at index {entry['index']} (term {entry['term']})"
+            self.pending_results[entry['index']] = result
+            if entry['index'] in self.pending_events:
+                self.pending_events[entry['index']].set()
+            print(f"[Raft] {self.node_id} applied log index {entry['index']}: {entry['operation']}")
+            self.last_applied += 1
+
+    def _start_election(self):
+        with self.state_lock:
+            if self.role == 'leader':
+                return
+            if time.time() - self.last_heartbeat < self.election_timeout:
+                return
+            self.role = 'candidate'
+            self.current_term += 1
+            term = self.current_term
+            self.voted_for = self.node_id
+            self.leader_id = None
+            self._reset_timer()
+            peers_snapshot = list(self.peers)
+
+        votes = 1
+        majority = self._majority()
+
+        for peer in peers_snapshot:
+            stub = self._get_stub(peer)
+            peer_id = peer['id']
+            try:
+                self._log_client("RequestVote", peer_id)
+                response = stub.RequestVote(
+                    raft_pb2.VoteRequest(
+                        term=term,
+                        candidate_id=self.node_id,
+                        last_log_index=0,
+                        last_log_term=0
+                    ),
+                    timeout=RAFT_RPC_TIMEOUT
+                )
+            except Exception as e:
+                print(f"[Raft] RequestVote to {peer_id} failed: {e}")
+                continue
+
+            with self.state_lock:
+                if self.role != 'candidate' or term != self.current_term:
+                    return
+
+                if self._should_step_down(response.term):
+                    self.current_term = response.term
+                    self.role = 'follower'
+                    self.voted_for = None
+                    self._reset_timer()
+                    return
+
+                if response.vote_granted:
+                    votes += 1
+                    if votes >= majority:
+                        self.role = 'leader'
+                        self.leader_id = self.node_id
+                        self.last_heartbeat_sent = 0.0
+                        print("this node become the new leader")
+                        return
+
+    def _broadcast_heartbeats(self):
+        with self.state_lock:
+            if self.role != 'leader':
+                return
+            term = self.current_term
+            peers_snapshot = list(self.peers)
+            commit_index = self.commit_index
+            entries_proto = [
+                raft_pb2.LogEntry(index=e['index'], term=e['term'], operation=e['operation'])
+                for e in self.log
+            ]
+
+        request = raft_pb2.AppendEntriesRequest(
+            term=term,
+            leader_id=self.node_id,
+            prev_log_index=0,
+            prev_log_term=0,
+            entries=entries_proto,
+            leader_commit=commit_index
+        )
+
+        success_count = 1  # self
+
+        for peer in peers_snapshot:
+            stub = self._get_stub(peer)
+            peer_id = peer['id']
+            try:
+                self._log_client("AppendEntries", peer_id)
+                response = stub.AppendEntries(request, timeout=RAFT_RPC_TIMEOUT)
+            except Exception as e:
+                print(f"[Raft] AppendEntries to {peer_id} failed: {e}")
+                continue
+
+            with self.state_lock:
+                if self._should_step_down(response.term):
+                    self.current_term = response.term
+                    self.role = 'follower'
+                    self.voted_for = None
+                    self.leader_id = None
+                    self._reset_timer()
+                    return
+                if response.success:
+                    success_count += 1
+
+        with self.state_lock:
+            if self.role == 'leader' and success_count >= self._majority():
+                if len(self.log) > self.commit_index:
+                    self.commit_index = len(self.log)
+                    self._apply_commits_locked()
+
+    def _run(self):
+        # Election/heartbeat loop
+        while not self.stop_event.is_set():
+            time.sleep(0.1)
+            send_heartbeat = False
+            start_election = False
+
+            with self.state_lock:
+                now = time.time()
+                if self.role == 'leader':
+                    if now - self.last_heartbeat_sent >= RAFT_HEARTBEAT_INTERVAL:
+                        self.last_heartbeat_sent = now
+                        send_heartbeat = True
+                else:
+                    if now - self.last_heartbeat >= self.election_timeout:
+                        start_election = True
+
+            if send_heartbeat:
+                self._broadcast_heartbeats()
+
+            if start_election:
+                self._start_election()
+
+    def RequestVote(self, request, context):
+        caller_id = request.candidate_id or "unknown"
+        print(f"Node {self.node_id} runs RPC RequestVote called by Node {caller_id}")
+
+        with self.state_lock:
+            if request.term < self.current_term:
+                return raft_pb2.VoteResponse(term=self.current_term, vote_granted=False)
+
+            reset_timer = False
+            if request.term > self.current_term:
+                self.current_term = request.term
+                self.role = 'follower'
+                self.voted_for = None
+                reset_timer = True
+
+            vote_granted = False
+            if self.voted_for in (None, caller_id):
+                vote_granted = True
+                self.voted_for = caller_id
+                reset_timer = True
+
+            if reset_timer:
+                self._reset_timer()
+
+            return raft_pb2.VoteResponse(term=self.current_term, vote_granted=vote_granted)
+
+    def AppendEntries(self, request, context):
+        caller_id = request.leader_id or "unknown"
+        print(f"Node {self.node_id} runs RPC AppendEntries called by Node {caller_id}")
+
+        with self.state_lock:
+            if request.term < self.current_term:
+                return raft_pb2.AppendEntriesResponse(term=self.current_term, success=False)
+
+            if request.term >= self.current_term:
+                if request.term > self.current_term:
+                    self.current_term = request.term
+                self.role = 'follower'
+                self.leader_id = caller_id
+                self.voted_for = None
+                self._reset_timer()
+
+            # Replace local log with leader's log (simplified replication of entire log)
+            self.log = [
+                {'index': entry.index, 'term': entry.term, 'operation': entry.operation}
+                for entry in request.entries
+            ]
+            self.commit_index = min(request.leader_commit, len(self.log))
+            self.last_applied = min(self.last_applied, self.commit_index, len(self.log))
+            self._apply_commits_locked()
+
+            return raft_pb2.AppendEntriesResponse(term=self.current_term, success=True)
+
+    def SubmitOperation(self, request, context):
+        caller_id = request.source_id or "client"
+        print(f"Node {self.node_id} runs RPC SubmitOperation called by Node {caller_id}")
+
+        # If not leader, forward to leader if known
+        if self.role != 'leader' or (self.leader_id and self.leader_id != self.node_id):
+            leader_address = self._get_leader_address()
+            if leader_address:
+                try:
+                    stub = self._get_stub_by_address(leader_address, self.leader_id or leader_address)
+                    self._log_client("SubmitOperation", self.leader_id or leader_address)
+                    forward_request = raft_pb2.OperationRequest(operation=request.operation, source_id=self.node_id)
+                    response = stub.SubmitOperation(forward_request, timeout=RAFT_RPC_TIMEOUT)
+                    return response
+                except Exception as e:
+                    print(f"[Raft] Forward SubmitOperation failed: {e}")
+            return raft_pb2.OperationResponse(success=False, result="No known leader", leader_id=self.leader_id or "")
+
+        # Leader path
+        with self.state_lock:
+            index = len(self.log) + 1
+            entry = {'index': index, 'term': self.current_term, 'operation': request.operation}
+            self.log.append(entry)
+            event = threading.Event()
+            self.pending_events[index] = event
+            self.pending_results[index] = None
+            # Trigger a near-immediate heartbeat to replicate
+            self.last_heartbeat_sent = 0.0
+            pending_event = event
+
+        # Wait for commit after replication
+        committed = pending_event.wait(timeout=5.0)
+        with self.state_lock:
+            result = self.pending_results.get(index) or ""
+        if not committed:
+            return raft_pb2.OperationResponse(success=False, result="Commit timeout", leader_id=self.node_id)
+
+        return raft_pb2.OperationResponse(success=True, result=result or "Committed", leader_id=self.node_id)
 
 class AuthServiceServicer(library_pb2_grpc.AuthServiceServicer):
     def Login(self, request, context):
@@ -1061,6 +1390,12 @@ def serve():
     library_pb2_grpc.add_SeatServiceServicer_to_server(SeatServiceServicer(), server)
     library_pb2_grpc.add_ReservationServiceServicer_to_server(ReservationServiceServicer(), server)
     library_pb2_grpc.add_NotifyServiceServicer_to_server(NotifyServiceServicer(), server)
+    raft_servicer = RaftNode(
+        node_id=RAFT_NODE_ID,
+        peers=parse_peer_config(RAFT_PEERS_RAW, RAFT_NODE_ID, RAFT_SELF_ADDRESS),
+        self_address=RAFT_SELF_ADDRESS
+    )
+    raft_pb2_grpc.add_RaftServiceServicer_to_server(raft_servicer, server)
 
     server.add_insecure_port('[::]:9090')
 
@@ -1069,6 +1404,7 @@ def serve():
 
     print('gRPC server started on port 9090 with 100-connection pool (10-100 per instance)')
     server.start()
+    raft_servicer.start()
     server.wait_for_termination()
 
 if __name__ == '__main__':

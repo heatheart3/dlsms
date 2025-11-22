@@ -7,9 +7,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Create protos directory and copy proto file
 RUN mkdir -p /app/protos
-COPY library.proto /app/protos/library.proto
+COPY *.proto /app/protos/
 
-RUN python -m grpc_tools.protoc -I/app/protos --python_out=. --grpc_python_out=. /app/protos/library.proto
+RUN python -m grpc_tools.protoc -I/app/protos --python_out=. --grpc_python_out=. /app/protos/library.proto /app/protos/raft.proto
 
 COPY server.py .
 
