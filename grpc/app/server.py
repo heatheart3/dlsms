@@ -173,6 +173,14 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
         self.peer_stubs = {}
         self.monitor_thread = None
 
+        self.last_p_log_time = 0
+
+        self.failed_time={}
+        for peer in self.peers:
+            self.failed_time[peer["id"]] = 0
+        print(self.role)
+
+
     def start(self):
         if not self.monitor_thread:
             self.monitor_thread = threading.Thread(target=self._run, daemon=True)
@@ -237,7 +245,6 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
 
         votes = 1
         majority = self._majority()
-
         for peer in peers_snapshot:
             stub = self._get_stub(peer)
             peer_id = peer['id']
@@ -273,7 +280,7 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
                         self.role = 'leader'
                         self.leader_id = self.node_id
                         self.last_heartbeat_sent = 0.0
-                        print("this node become the new leader")
+                        print(f"Node {self.node_id} become the new leader")
                         return
 
     def _broadcast_heartbeats(self):
@@ -307,6 +314,9 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
                 response = stub.AppendEntries(request, timeout=RAFT_RPC_TIMEOUT)
             except Exception as e:
                 print(f"[Raft] AppendEntries to {peer_id} failed: {e}")
+                del self.peer_stubs[peer['address']]
+                del self.peer_channels[peer['address']]
+                # stub = self._get_stub(peer)
                 continue
 
             with self.state_lock:
@@ -340,6 +350,9 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
                         self.last_heartbeat_sent = now
                         send_heartbeat = True
                 else:
+                    if now - self.last_p_log_time >= 3:
+                        self.last_p_log_time = now
+                        print(f"Print current log on node{self.node_id} {self.log}")
                     if now - self.last_heartbeat >= self.election_timeout:
                         start_election = True
 
@@ -415,6 +428,7 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
                     self._log_client("SubmitOperation", self.leader_id or leader_address)
                     forward_request = raft_pb2.OperationRequest(operation=request.operation, source_id=self.node_id)
                     response = stub.SubmitOperation(forward_request, timeout=RAFT_RPC_TIMEOUT)
+                    print(f"Node {self.node_id} has forward op:{request.operation} to leader")
                     return response
                 except Exception as e:
                     print(f"[Raft] Forward SubmitOperation failed: {e}")

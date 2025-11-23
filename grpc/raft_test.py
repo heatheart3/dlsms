@@ -68,10 +68,14 @@ class RaftDockerTest(unittest.TestCase):
             time.sleep(0.2)
         self.fail("Leader not detected within timeout")
 
-    def test_leader_election_and_forwarding(self):
+    def test_leader_probe(self):
         leader_id = self._wait_for_leader()
         self.assertTrue(leader_id, "Leader ID should be non-empty")
 
+    def test_log_replication_correctness(self):
+        leader_id = self._wait_for_leader()
+        self.assertTrue(leader_id, "Leader ID should be non-empty")
+        print(f"Have elected a leader {leader_id}")
         # Submit via each target to ensure forwarding to leader works
         for idx, (target, stub) in enumerate(self.raft_stubs):
             op = f"op-{idx+1}"
@@ -83,6 +87,7 @@ class RaftDockerTest(unittest.TestCase):
             self.assertTrue(resp.success, f"Operation via {target} failed: {resp.result}")
             self.assertEqual(resp.leader_id, leader_id, "Requests should route to the same leader")
 
+
         # Second round to check log can grow and commit multiple entries
         for idx, (target, stub) in enumerate(self.raft_stubs):
             op = f"op-second-{idx+1}"
@@ -93,6 +98,7 @@ class RaftDockerTest(unittest.TestCase):
             )
             self.assertTrue(resp.success, f"Second operation via {target} failed: {resp.result}")
             self.assertEqual(resp.leader_id, leader_id)
+            print("Have forward to the same leader")
 
     def test_operation_service_submit(self):
         leader_id = self._wait_for_leader()
@@ -140,6 +146,8 @@ class RaftDockerTest(unittest.TestCase):
             )
             self.assertTrue(resp.success, f"User op {op} via {target} failed: {resp.result}")
             self.assertEqual(resp.leader_id, leader_id)
+
+    
 
 
 if __name__ == "__main__":
