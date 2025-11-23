@@ -1,4 +1,4 @@
-# DL-SMS gRPC with raft
+# Distributed Library Seat Management System (DL-SMS) with Raft
 
 **This project includes two architectures: REST and gRPC.
 The Raft algorithm is implemented in the gRPC version.
