@@ -496,6 +496,29 @@ class AuthServiceServicer(library_pb2_grpc.AuthServiceServicer):
 
     def Register(self, request, context):
         try:
+            # Step 1: replicate the intent through Raft before executing
+            if RAFT_NODE_INSTANCE is not None:
+                try:
+                    op_payload = {
+                        "type": "Auth.Register",
+                        "student_id": request.student_id,
+                        "name": request.name,
+                    }
+                    raft_request = raft_pb2.OperationRequest(
+                        operation=json.dumps(op_payload),
+                        source_id=f"AuthService:{RAFT_NODE_ID}",
+                    )
+                    raft_response = RAFT_NODE_INSTANCE.SubmitOperation(raft_request, None)
+                    if not raft_response.success:
+                        context.set_code(grpc.StatusCode.ABORTED)
+                        context.set_details(f"Raft commit failed: {raft_response.result}")
+                        return library_pb2.RegisterResponse()
+                except Exception as e:
+                    context.set_code(grpc.StatusCode.UNAVAILABLE)
+                    context.set_details(f"Raft submit error: {e}")
+                    return library_pb2.RegisterResponse()
+
+            # Step 2: execute the actual user registration against the database
             password_hash = bcrypt.hashpw(request.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
             conn = get_db_connection()
@@ -513,8 +536,6 @@ class AuthServiceServicer(library_pb2_grpc.AuthServiceServicer):
 
                 cur.close()
                 return_db_connection(conn)
-
-                submit_raft_operation_log(f"Register user {user['id']} ({user['student_id']})")
 
                 return library_pb2.RegisterResponse(
                     token=token,
@@ -874,6 +895,31 @@ class SeatServiceServicer(library_pb2_grpc.SeatServiceServicer):
 class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
     def CreateReservation(self, request, context):
         try:
+            # Step 1: replicate the intent through Raft before executing
+            if RAFT_NODE_INSTANCE is not None:
+                try:
+                    op_payload = {
+                        "type": "Reservation.Create",
+                        "user_id": request.user_id,
+                        "seat_id": request.seat_id,
+                        "start_time": request.start_time,
+                        "end_time": request.end_time,
+                    }
+                    raft_request = raft_pb2.OperationRequest(
+                        operation=json.dumps(op_payload),
+                        source_id=f"ReservationService:{RAFT_NODE_ID}",
+                    )
+                    raft_response = RAFT_NODE_INSTANCE.SubmitOperation(raft_request, None)
+                    if not raft_response.success:
+                        context.set_code(grpc.StatusCode.ABORTED)
+                        context.set_details(f"Raft commit failed: {raft_response.result}")
+                        return library_pb2.CreateReservationResponse()
+                except Exception as e:
+                    context.set_code(grpc.StatusCode.UNAVAILABLE)
+                    context.set_details(f"Raft submit error: {e}")
+                    return library_pb2.CreateReservationResponse()
+
+            # Step 2: execute the actual reservation creation against the database
             conn = get_db_connection()
             cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -901,10 +947,6 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
                 return_db_connection(conn)
 
                 invalidate_seat_cache(request.seat_id)
-
-                submit_raft_operation_log(
-                    f"CreateReservation id={reservation['id']} user={reservation['user_id']} seat={reservation['seat_id']}"
-                )
 
                 return library_pb2.CreateReservationResponse(
                     reservation=library_pb2.Reservation(
@@ -987,6 +1029,28 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
     def CheckIn(self, request, context):
         try:
+            # Step 1: replicate the intent through Raft before executing
+            if RAFT_NODE_INSTANCE is not None:
+                try:
+                    op_payload = {
+                        "type": "Reservation.CheckIn",
+                        "reservation_id": request.reservation_id,
+                    }
+                    raft_request = raft_pb2.OperationRequest(
+                        operation=json.dumps(op_payload),
+                        source_id=f"ReservationService:{RAFT_NODE_ID}",
+                    )
+                    raft_response = RAFT_NODE_INSTANCE.SubmitOperation(raft_request, None)
+                    if not raft_response.success:
+                        context.set_code(grpc.StatusCode.ABORTED)
+                        context.set_details(f"Raft commit failed: {raft_response.result}")
+                        return library_pb2.CheckInResponse()
+                except Exception as e:
+                    context.set_code(grpc.StatusCode.UNAVAILABLE)
+                    context.set_details(f"Raft submit error: {e}")
+                    return library_pb2.CheckInResponse()
+
+            # Step 2: execute the actual check-in against the database
             conn = get_db_connection()
             cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1045,8 +1109,6 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
             invalidate_seat_cache(reservation['seat_id'])
 
-            submit_raft_operation_log(f"CheckIn reservation id={updated_reservation['id']}")
-
             return library_pb2.CheckInResponse(
                 reservation=library_pb2.Reservation(
                     id=updated_reservation['id'],
@@ -1067,6 +1129,28 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 
     def CancelReservation(self, request, context):
         try:
+            # Step 1: replicate the intent through Raft before executing
+            if RAFT_NODE_INSTANCE is not None:
+                try:
+                    op_payload = {
+                        "type": "Reservation.Cancel",
+                        "reservation_id": request.reservation_id,
+                    }
+                    raft_request = raft_pb2.OperationRequest(
+                        operation=json.dumps(op_payload),
+                        source_id=f"ReservationService:{RAFT_NODE_ID}",
+                    )
+                    raft_response = RAFT_NODE_INSTANCE.SubmitOperation(raft_request, None)
+                    if not raft_response.success:
+                        context.set_code(grpc.StatusCode.ABORTED)
+                        context.set_details(f"Raft commit failed: {raft_response.result}")
+                        return library_pb2.CancelReservationResponse()
+                except Exception as e:
+                    context.set_code(grpc.StatusCode.UNAVAILABLE)
+                    context.set_details(f"Raft submit error: {e}")
+                    return library_pb2.CancelReservationResponse()
+
+            # Step 2: execute the actual cancellation against the database
             conn = get_db_connection()
             cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1106,8 +1190,6 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
             return_db_connection(conn)
 
             invalidate_seat_cache(reservation['seat_id'])
-
-            submit_raft_operation_log(f"CancelReservation id={cancelled_reservation['id']}")
 
             return library_pb2.CancelReservationResponse(
                 reservation=library_pb2.Reservation(
@@ -1180,6 +1262,31 @@ class ReservationServiceServicer(library_pb2_grpc.ReservationServiceServicer):
 class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
     def AddToWaitlist(self, request, context):
         try:
+            # Step 1: replicate the intent through Raft before executing
+            if RAFT_NODE_INSTANCE is not None:
+                try:
+                    op_payload = {
+                        "type": "Waitlist.Add",
+                        "user_id": request.user_id,
+                        "seat_id": request.seat_id if request.HasField('seat_id') else None,
+                        "branch": request.branch,
+                        "desired_time": request.desired_time,
+                    }
+                    raft_request = raft_pb2.OperationRequest(
+                        operation=json.dumps(op_payload),
+                        source_id=f"NotifyService:{RAFT_NODE_ID}",
+                    )
+                    raft_response = RAFT_NODE_INSTANCE.SubmitOperation(raft_request, None)
+                    if not raft_response.success:
+                        context.set_code(grpc.StatusCode.ABORTED)
+                        context.set_details(f"Raft commit failed: {raft_response.result}")
+                        return library_pb2.AddToWaitlistResponse()
+                except Exception as e:
+                    context.set_code(grpc.StatusCode.UNAVAILABLE)
+                    context.set_details(f"Raft submit error: {e}")
+                    return library_pb2.AddToWaitlistResponse()
+
+            # Step 2: execute the actual waitlist insertion against the database
             conn = get_db_connection()
             cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1198,8 +1305,6 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
             return_db_connection(conn)
 
             desired_time = waitlist_entry['desired_time']
-
-            submit_raft_operation_log(f"AddToWaitlist id={waitlist_entry['id']} user={waitlist_entry['user_id']}")
 
             return library_pb2.AddToWaitlistResponse(
                 entry=library_pb2.WaitlistEntry(
@@ -1252,6 +1357,28 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
 
     def RemoveFromWaitlist(self, request, context):
         try:
+            # Step 1: replicate the intent through Raft before executing
+            if RAFT_NODE_INSTANCE is not None:
+                try:
+                    op_payload = {
+                        "type": "Waitlist.Remove",
+                        "waitlist_id": request.waitlist_id,
+                    }
+                    raft_request = raft_pb2.OperationRequest(
+                        operation=json.dumps(op_payload),
+                        source_id=f"NotifyService:{RAFT_NODE_ID}",
+                    )
+                    raft_response = RAFT_NODE_INSTANCE.SubmitOperation(raft_request, None)
+                    if not raft_response.success:
+                        context.set_code(grpc.StatusCode.ABORTED)
+                        context.set_details(f"Raft commit failed: {raft_response.result}")
+                        return library_pb2.RemoveFromWaitlistResponse()
+                except Exception as e:
+                    context.set_code(grpc.StatusCode.UNAVAILABLE)
+                    context.set_details(f"Raft submit error: {e}")
+                    return library_pb2.RemoveFromWaitlistResponse()
+
+            # Step 2: execute the actual removal against the database
             conn = get_db_connection()
             cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1269,8 +1396,6 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
             cur.close()
             return_db_connection(conn)
 
-            submit_raft_operation_log(f"RemoveFromWaitlist id={deleted['id']}")
-
             return library_pb2.RemoveFromWaitlistResponse(
                 message='Removed from waitlist',
                 id=deleted['id']
@@ -1283,6 +1408,29 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
 
     def NotifyUsers(self, request, context):
         try:
+            # Step 1: replicate the intent through Raft before executing
+            if RAFT_NODE_INSTANCE is not None:
+                try:
+                    op_payload = {
+                        "type": "Waitlist.Notify",
+                        "seat_id": request.seat_id,
+                        "message": request.message,
+                    }
+                    raft_request = raft_pb2.OperationRequest(
+                        operation=json.dumps(op_payload),
+                        source_id=f"NotifyService:{RAFT_NODE_ID}",
+                    )
+                    raft_response = RAFT_NODE_INSTANCE.SubmitOperation(raft_request, None)
+                    if not raft_response.success:
+                        context.set_code(grpc.StatusCode.ABORTED)
+                        context.set_details(f"Raft commit failed: {raft_response.result}")
+                        return library_pb2.NotifyUsersResponse()
+                except Exception as e:
+                    context.set_code(grpc.StatusCode.UNAVAILABLE)
+                    context.set_details(f"Raft submit error: {e}")
+                    return library_pb2.NotifyUsersResponse()
+
+            # Step 2: execute the actual notification bookkeeping against the database
             conn = get_db_connection()
             cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1321,8 +1469,6 @@ class NotifyServiceServicer(library_pb2_grpc.NotifyServiceServicer):
 
                 cur.close()
                 return_db_connection(conn)
-
-                submit_raft_operation_log(f"NotifyUsers waitlist_id={waitlist_entry['id']} user_id={waitlist_entry['user_id']}")
 
                 return library_pb2.NotifyUsersResponse(
                     notified=True,

@@ -218,5 +218,42 @@ def run_tests():
 
     channel.close()
 
+
+def test_raft():
+    channel = grpc.insecure_channel('localhost:9090')
+
+    auth_stub = library_pb2_grpc.AuthServiceStub(channel)
+    seat_stub = library_pb2_grpc.SeatServiceStub(channel)
+    reservation_stub = library_pb2_grpc.ReservationServiceStub(channel)
+    notify_stub = library_pb2_grpc.NotifyServiceStub(channel)
+    print("\n1. Testing Authentication - Login")
+    try:
+        login_response = auth_stub.Login(library_pb2.LoginRequest(
+            student_id='S2021001',
+            password='password123'
+        ))
+        print(f"  Login successful!")
+        print(f"  User ID: {login_response.user_id}")
+        print(f"  Name: {login_response.name}")
+        print(f"  Token: {login_response.token[:50]}...")
+        token = login_response.token
+        user_id = login_response.user_id
+    except grpc.RpcError as e:
+        print(f"  Login failed: {e.details()}")
+        return
+    print("\n7. Testing Get Reservation")
+    try:
+        get_res_response = reservation_stub.GetReservation(
+            library_pb2.GetReservationRequest(reservation_id=reservation_id)
+        )
+        print(f"  Reservation details:")
+        print(f"    ID: {get_res_response.reservation.id}")
+        print(f"    Branch: {get_res_response.reservation.branch}")
+        print(f"    Area: {get_res_response.reservation.area}")
+        print(f"    Status: {get_res_response.reservation.status}")
+    except grpc.RpcError as e:
+        print(f"  Error: {e.details()}")
+
 if __name__ == '__main__':
+    
     run_tests()
