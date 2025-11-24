@@ -101,7 +101,7 @@ python -m unittest raft_test.RaftDockerTest.test_log_replication_correctness
 then inspect each container's logs and check whether logs are successfully replicated from the leader to all follower nodes
 
 
-## Things to emphasize
+## Anything unusual about your solution that the TA should know
 1. This system uses nginx as a load balancer and we can't control the request will be sent to which node. Therefore, in "Test case 3", if a request is directly sent to the leader, you can run "python -m unittest raft_test.RaftDockerTest.test_leader_probe" again to verify operation forward.
 2. The result screenshots of each test case have been put in the final_report. If you feel confused about results which you got in the tests, you can check corresponding screenshots in the final report.
-
+3. Because in the original systems design (Project 2), the severs are transparent to the client in which the only thing we know is the address of the loadbalancer. Therefore,  

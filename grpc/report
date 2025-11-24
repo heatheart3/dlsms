@@ -1,0 +1,269 @@
+DL-SMS gRPC Raft Implementation Report
+======================================
+
+Overview
+--------
+
+The gRPC architecture in this project embeds a lightweight Raft-style
+consensus layer inside each `grpc-app*` instance. The Raft logic is used to
+replicate an append-only “operation log” (for example, user registrations or
+reservation actions) across all gRPC instances so that important events can be
+observed consistently regardless of which node receives the client traffic.
+
+This report describes:
+- how Raft is implemented,
+- the key interfaces and where they live in the codebase, and
+- the workflows for leader election and log replication.
+
+Key Files and Components
+------------------------
+
+- `grpc/protos/raft.proto`
+  - Defines the Raft RPC interface and message types.
+  - Service: `raft.RaftService`
+    - `RequestVote(VoteRequest) -> VoteResponse`
+    - `AppendEntries(AppendEntriesRequest) -> AppendEntriesResponse`
+    - `SubmitOperation(OperationRequest) -> OperationResponse`
+    - `GetLogs(GetLogsRequest) -> GetLogsResponse`
+  - Core messages:
+    - `VoteRequest` / `VoteResponse` for elections.
+    - `LogEntry` for individual log records (index, term, operation).
+    - `AppendEntriesRequest` / `AppendEntriesResponse` for log replication.
+    - `OperationRequest` / `OperationResponse` as the public “submit an
+      operation” API used by higher-level services.
+    - `GetLogsRequest` / `GetLogsResponse` for introspecting a node’s log and
+      Raft state.
+
+- `grpc/app/server.py`
+  - Central implementation file for the gRPC monolith.
+  - Contains the `RaftNode` class, which implements
+    `raft_pb2_grpc.RaftServiceServicer`.
+  - Registers the servicer in `serve()`:
+    - `raft_servicer = RaftNode(...)`
+    - `raft_pb2_grpc.add_RaftServiceServicer_to_server(raft_servicer, server)`
+  - Also defines `OperationServiceServicer` (from `library.proto`), which
+    exposes a higher-level SubmitOperation RPC and delegates to `RaftNode`.
+
+
+RaftNode Class and State
+------------------------
+
+Location: `grpc/app/server.py` (class `RaftNode`).
+
+`RaftNode` is the in-memory implementation of the Raft protocol on each
+gRPC instance. It subclasses `raft_pb2_grpc.RaftServiceServicer` so that it
+can be registered directly as the `RaftService` implementation.
+
+Key fields:
+- `node_id`: the identity of this node (string), injected from
+  `RAFT_NODE_ID` or `INSTANCE_ID`.
+- `peers`: list of peer descriptors `{id, address}`, built by
+  `parse_peer_config` from `RAFT_PEERS`.
+- `self_address`: address at which this node is reachable by its peers.
+- `id_to_address`: mapping of `node_id -> address` for lookup/forwarding.
+
+- Raft state:
+  - `current_term`: integer term counter.
+  - `voted_for`: last candidate this node voted for in the current term.
+  - `leader_id`: known leader’s node id (if any).
+  - `role`: one of `"follower"`, `"candidate"`, `"leader"`.
+  - `log`: in-memory list of dictionaries:
+    `{index, term, operation}`.
+  - `commit_index`: highest log index known to be committed.
+  - `last_applied`: highest log index that has been applied to the “state
+    machine” (here, application-side results and event notifications).
+  - `pending_events`: map `index -> threading.Event` used by the leader to
+    wait until a newly appended entry has been committed.
+  - `pending_results`: map `index -> result string` describing the applied
+    operation.
+
+- Timing and concurrency:
+  - `state_lock`: `threading.RLock` guarding all Raft state modifications.
+  - `stop_event`: `threading.Event` used to stop the Raft background loop.
+  - `last_heartbeat`: last time this node received a heartbeat (AppendEntries)
+    from the leader.
+  - `last_heartbeat_sent`: last time this node (if leader) broadcast a
+    heartbeat.
+  - `election_timeout`: randomly chosen timeout window per node, drawn from
+    `RAFT_ELECTION_TIMEOUT_RANGE`.
+  - `monitor_thread`: background thread running `_run()` to drive elections
+    and heartbeats.
+
+- RPC peer plumbing:
+  - `peer_channels` / `peer_stubs`: lazily created gRPC channels and stubs
+    used to call `RaftService` methods on other nodes.
+
+Utility methods:
+- `_random_election_timeout()`: draws a new election timeout from the global
+  range.
+- `_majority()`: computes the number of votes required for majority:
+  `(len(peers) + 1) // 2 + 1`.
+- `_log_client(rpc_name, peer_id)`: logs outbound RPC calls for debugging.
+- `_should_step_down(response_term)`: checks whether this node’s term is
+  stale compared to a peer’s response; used to revert to follower.
+- `_get_stub(peer)` and `_get_stub_by_address(address, peer_id)`: build or
+  reuse gRPC stubs for peer RPCs.
+- `_reset_timer()`: updates `last_heartbeat` and draws a fresh
+  `election_timeout`.
+- `_get_leader_address()`: resolves `leader_id` into a host:port address
+  using `id_to_address`.
+- `_apply_commits_locked()`: iterates while `last_applied < commit_index`
+  and applies each log entry, generating a result string and unblocking any
+  waiting client via `pending_events[index].set()`.
+
+Raft RPC Interfaces and Where They Are Implemented
+--------------------------------------------------
+
+1. `RequestVote`
+   - Proto definition:
+     - `grpc/protos/raft.proto`: `rpc RequestVote(VoteRequest) returns (VoteResponse);`
+   - Implementation:
+     - `grpc/app/server.py`, `RaftNode.RequestVote`.
+   - Behavior:
+     - Validates the candidate’s term against `current_term`.
+     - If the request’s term is lower than `current_term`, rejects the vote.
+     - If the term is higher, updates `current_term`, demotes to follower,
+       clears `voted_for` and resets the election timer.
+     - Grants a vote if `voted_for` is `None` or already equal to the
+       candidate id.
+     - Returns `VoteResponse(term=<current_term>, vote_granted=<bool>)`.
+
+2. `AppendEntries`
+   - Proto definition:
+     - `grpc/protos/raft.proto`: `rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);`
+   - Implementation:
+     - `grpc/app/server.py`, `RaftNode.AppendEntries`.
+   - Behavior:
+     - Rejects entries if the incoming term is older than `current_term`.
+     - If the term is equal or greater:
+       - updates `current_term` when necessary,
+       - sets `role` to follower,
+       - sets `leader_id` to the caller id,
+       - clears `voted_for` and resets the election timer.
+     - Simplified replication:
+       - replaces the local `log` with the leader’s `entries` list
+         (no per-entry conflict resolution).
+       - sets `commit_index` to `min(leader_commit, len(log))`.
+       - clamps `last_applied` not to exceed `commit_index`.
+       - calls `_apply_commits_locked()` to deliver results to waiting
+         clients.
+     - Returns `AppendEntriesResponse(term=current_term, success=True)` on
+       success.
+
+3. `SubmitOperation`
+   - Proto definition:
+     - `grpc/protos/raft.proto`: `rpc SubmitOperation(OperationRequest) returns (OperationResponse);`
+   - Implementation:
+     - `grpc/app/server.py`, `RaftNode.SubmitOperation`.
+   - Behavior:
+     - Handles both client-side and internal "library" operations (through
+       `OperationServiceServicer`, see below).
+     - Follower path:
+       - If the node is not leader (`role != "leader"`) or knows another
+         `leader_id`, it attempts to forward the operation to the leader:
+         - uses `_get_leader_address()` to resolve the leader’s address;
+         - calls `SubmitOperation` on the leader via a `RaftServiceStub`;
+         - returns the leader’s `OperationResponse` to the caller.
+       - If no leader is known, returns
+         `success=False, result="No known leader"`.
+     - Leader path:
+       - Under `state_lock`, appends a new entry to `self.log` with:
+         - `index = len(log) + 1`
+         - `term = current_term`
+         - `operation = request.operation`
+       - Creates a `threading.Event` for this index in `pending_events` and
+         an empty slot in `pending_results`.
+       - Forces the next heartbeat to happen soon by zeroing
+         `last_heartbeat_sent`. This will cause `_run()` to call
+         `_broadcast_heartbeats()` and replicate the new log entry.
+       - After releasing the lock, waits up to 5 seconds for `pending_event`
+         to be set (i.e., for the entry to become committed).
+       - If the event is not signaled in time, returns
+         `success=False, result="Commit timeout"`.
+       - Otherwise, returns `success=True` with the stored result string
+         (or `"Committed"` as a fallback) and the `leader_id`.
+
+   - Higher-level entry point:
+     - `grpc/app/server.py`: class `OperationServiceServicer` in the
+       `library` service uses `RaftNode` to log domain-level operations.
+     - This decouples the library business logic from the Raft-specific
+       RPC surface.
+
+
+Election Workflow
+-----------------
+
+Election is driven by the `RaftNode._run()` background loop and the
+`_start_election()` method.
+
+1. Background loop(`_run()`)
+    - if `role == "leader"`, schedules a heartbeat broadcast.
+    - if the node is not leader:
+      - detects election timeout by checking
+      - If exceeded, schedules a new election by setting `start_election = True`.
+
+2. Starting an election (`_start_election`)
+    - changes `role` to `"candidate"`, increments `current_term` and initializes `votes = 1` (self-vote)
+    - resets the election timer
+    - sends `VoteRequest(term, candidate_id, last_log_index=0, last_log_term=0)` with timeout.
+3. Election (`_start_election`)
+      - if receive a response with higher term, then `_should_step_down()` is True
+      - updates `current_term`, becomes follower, resets timer.
+      - if  `votes >= majority`, become leader and ends the election successfully.
+
+4. After election(`_run()`)
+   - Once a node becomes leader, `_run()` will begin sending periodic
+     AppendEntries heartbeats to all peers via `_broadcast_heartbeats()`.
+   - Followers receiving AppendEntries update their `last_heartbeat` and
+     reset the election timer, preventing other competing elections as long
+     as the leader remains healthy.
+
+Log Replication Workflow
+------------------------
+
+1. Submitting an operation and forward(`RaftService.SubmitOperation`)
+   - Clients call SubmitOperation.
+   - If the call reaches a follower, it will be forwarded to leader.
+
+2. Log_replication start(`_broadcast_heartbeats()`)
+   - The leader uses heartbeats as the replication mechanism.
+   - sends this request to every peer.
+   - if success_count >= majority`, then apply commits.
+
+3. Applying commits(`_apply_commits_locked()`)
+   - It repeatedly:
+     - takes the log entry at position `last_applied`,
+     - synthesizes a result string such as:
+       `"Executed <operation> at index <index> (term <term>)"`,
+     - stores this result in `pending_results[index]`,
+     - if there is a waiting event for `index` in `pending_events`, calls
+       `set()` to wake the blocked `SubmitOperation` caller,
+     - logs the applied entry and increments `last_applied`.
+   - This mechanism ensures that:
+     - the client’s `SubmitOperation` call only completes once the entry has
+       been replicated to a majority (leader’s `commit_index` advanced).
+
+4. Follower log updates
+   - When followers receive `AppendEntries` from the leader:
+     - they replace their entire `log` with the entries sent by the leader.
+     - update `commit_index` and `last_applied` (bounded by `leader_commit`).
+     - call `_apply_commits_locked()`, which ensures that the same
+       operations are considered committed and applied on each follower.
+
+Integration with Application Logic
+----------------------------------
+
+While Raft itself does not directly modify the database schema or enforce
+strong consistency of the primary library data, the project uses the Raft
+operation log as an audit and coordination mechanism:
+
+- Business services (Auth, Reservation, etc.) submit string-form
+  operations via `OperationServiceServicer` to `RaftNode.SubmitOperation`
+  whenever they perform important actions (e.g., registering a user).
+- These operations are replicated across nodes, giving a consistent,
+  append-only record of high-level events.
+- The log is not replayed into PostgreSQL or Redis; the main state remains
+  in the database. Raft is used here to ensure that all application
+  instances share the same ordered view of significant domain events.
+
+
